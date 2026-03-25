@@ -1,0 +1,1023 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simple Budget Tracker</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const {
+      DollarSign, TrendingDown, PiggyBank, Calendar, Plus, Trash2,
+      Settings, LogOut, Lock, CreditCard, TrendingUp, CheckCircle,
+      AlertCircle, Edit2, ChevronDown, ChevronUp, Download
+    } = lucide;
+
+    const { useState, useEffect } = React;
+
+    // ─── localStorage helpers ────────────────────────────────────────────────
+    const storageGet = (key) => {
+      const val = localStorage.getItem(key);
+      return val ? { value: val } : null;
+    };
+    const storageSet = (key, value) => localStorage.setItem(key, value);
+    const storageDelete = (key) => localStorage.removeItem(key);
+
+    // ─── Root ────────────────────────────────────────────────────────────────
+    function BudgetTracker() {
+      const [isLoggedIn, setIsLoggedIn] = useState(false);
+      const [currentUser, setCurrentUser] = useState('');
+      const [isLoading, setIsLoading] = useState(true);
+
+      useEffect(() => { checkLoginStatus(); }, []);
+
+      const checkLoginStatus = () => {
+        try {
+          const sessionData = storageGet('budget-session');
+          if (sessionData) {
+            const session = JSON.parse(sessionData.value);
+            if (session.isLoggedIn && session.username) {
+              setIsLoggedIn(true);
+              setCurrentUser(session.username);
+            }
+          }
+        } catch (e) {}
+        setIsLoading(false);
+      };
+
+      const handleLogin = (username) => { setIsLoggedIn(true); setCurrentUser(username); };
+      const handleLogout = () => {
+        storageDelete('budget-session');
+        setIsLoggedIn(false);
+        setCurrentUser('');
+      };
+
+      if (isLoading) return (
+        <div className="flex items-center justify-center h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+            <p className="text-gray-600">Loading...</p>
+          </div>
+        </div>
+      );
+
+      if (!isLoggedIn) return <LoginScreen onLogin={handleLogin} />;
+      return <MainApp currentUser={currentUser} onLogout={handleLogout} />;
+    }
+
+    // ─── Login ───────────────────────────────────────────────────────────────
+    function LoginScreen({ onLogin }) {
+      const [isRegistering, setIsRegistering] = useState(false);
+      const [username, setUsername] = useState('');
+      const [password, setPassword] = useState('');
+      const [error, setError] = useState('');
+      const [success, setSuccess] = useState('');
+      const [isLoading, setIsLoading] = useState(false);
+
+      const handleSubmit = () => {
+        setError(''); setSuccess('');
+        if (!username || !password) { setError('Please enter both username and password'); return; }
+        if (username.length < 3) { setError('Username must be at least 3 characters'); return; }
+        if (password.length < 4) { setError('Password must be at least 4 characters'); return; }
+        setIsLoading(true);
+        const userKey = `budget-user-${username.toLowerCase()}`;
+        if (isRegistering) {
+          if (storageGet(userKey)) { setError('Username already exists.'); setIsLoading(false); return; }
+          storageSet(userKey, JSON.stringify({ username, password }));
+          storageSet('budget-session', JSON.stringify({ isLoggedIn: true, username }));
+          setSuccess('Account created!');
+          setTimeout(() => onLogin(username), 500);
+        } else {
+          const userData = storageGet(userKey);
+          if (!userData) { setError('Username not found. Please register first.'); setIsLoading(false); return; }
+          const user = JSON.parse(userData.value);
+          if (user.password !== password) { setError('Incorrect password.'); setIsLoading(false); return; }
+          storageSet('budget-session', JSON.stringify({ isLoggedIn: true, username }));
+          setSuccess('Login successful!');
+          setTimeout(() => onLogin(username), 500);
+        }
+      };
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-6">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center justify-center w-16 h-16 bg-indigo-100 rounded-full mb-4">
+                {React.createElement(Lock, { className: "text-indigo-600", size: 32 })}
+              </div>
+              <h1 className="text-3xl font-bold text-gray-800 mb-2">Simple Budget Tracker</h1>
+              <p className="text-gray-500">{isRegistering ? 'Create your account' : 'Welcome back!'}</p>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Username</label>
+                <input type="text" value={username} onChange={e => setUsername(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  placeholder="Enter your username" disabled={isLoading} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+                <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  placeholder="Enter your password" disabled={isLoading} />
+              </div>
+              {error && <div className="bg-red-50 border border-red-200 rounded-lg p-3"><p className="text-sm text-red-800">{error}</p></div>}
+              {success && <div className="bg-green-50 border border-green-200 rounded-lg p-3"><p className="text-sm text-green-800">{success}</p></div>}
+              <button onClick={handleSubmit} disabled={isLoading}
+                className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 transition-colors disabled:opacity-50">
+                {isLoading ? 'Please wait...' : (isRegistering ? 'Create Account' : 'Login')}
+              </button>
+              <div className="text-center">
+                <button onClick={() => { setIsRegistering(!isRegistering); setError(''); setSuccess(''); }}
+                  className="text-indigo-600 hover:text-indigo-700 text-sm font-medium">
+                  {isRegistering ? 'Already have an account? Login' : "Don't have an account? Register"}
+                </button>
+              </div>
+            </div>
+            <div className="mt-6 pt-6 border-t border-gray-100">
+              <p className="text-xs text-gray-400 text-center">Your data is stored locally on this device</p>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Main App ────────────────────────────────────────────────────────────
+    function MainApp({ currentUser, onLogout }) {
+      const [activeTab, setActiveTab] = useState('dashboard');
+      const [salary, setSalary] = useState(0);
+      const [fixedCosts, setFixedCosts] = useState([]);
+      const [spending, setSpending] = useState([]);
+      const [savings, setSavings] = useState([]);
+      const [futurePlans, setFuturePlans] = useState([]);
+      const [loans, setLoans] = useState([]);
+      const [monthlyBalance, setMonthlyBalance] = useState(0);
+      const [isLoading, setIsLoading] = useState(true);
+
+      useEffect(() => { loadData(); cleanupOldData(); }, [currentUser]);
+
+      const cleanupOldData = () => {
+        try {
+          const spendingData = storageGet(`budget-${currentUser}-spending`);
+          if (!spendingData) return;
+          const allSpending = JSON.parse(spendingData.value);
+          const sixMonthsAgo = new Date();
+          sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+          const oldSpending = allSpending.filter(s => new Date(s.date) < sixMonthsAgo);
+          if (oldSpending.length > 0) {
+            const shouldDelete = confirm(`You have ${oldSpending.length} transactions older than 6 months. Delete them to free up space?`);
+            if (shouldDelete) {
+              if (confirm('Download a summary before deleting?')) {
+                const byMonth = {};
+                oldSpending.forEach(s => {
+                  const d = new Date(s.date);
+                  const k = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+                  if (!byMonth[k]) byMonth[k] = [];
+                  byMonth[k].push(s);
+                });
+                let summary = 'SPENDING SUMMARY\n\n';
+                Object.keys(byMonth).sort().forEach(m => {
+                  const total = byMonth[m].reduce((s,e) => s+e.amount, 0);
+                  summary += `${m}: KES ${total.toLocaleString()} (${byMonth[m].length} transactions)\n`;
+                });
+                const blob = new Blob([summary], { type: 'text/plain' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url; a.download = `budget-summary-${new Date().toISOString().split('T')[0]}.txt`;
+                a.click(); URL.revokeObjectURL(url);
+              }
+              storageSet(`budget-${currentUser}-spending`, JSON.stringify(allSpending.filter(s => new Date(s.date) >= sixMonthsAgo)));
+            }
+          }
+        } catch(e) {}
+      };
+
+      const loadData = () => {
+        try {
+          const s = storageGet(`budget-${currentUser}-salary`);
+          const f = storageGet(`budget-${currentUser}-fixed-costs`);
+          const sp = storageGet(`budget-${currentUser}-spending`);
+          const sv = storageGet(`budget-${currentUser}-savings`);
+          const pl = storageGet(`budget-${currentUser}-future-plans`);
+          const lo = storageGet(`budget-${currentUser}-loans`);
+          const b  = storageGet(`budget-${currentUser}-monthly-balance`);
+          if (s)  setSalary(JSON.parse(s.value));
+          if (f)  setFixedCosts(JSON.parse(f.value));
+          if (sp) setSpending(JSON.parse(sp.value));
+          if (sv) setSavings(JSON.parse(sv.value));
+          if (pl) setFuturePlans(JSON.parse(pl.value));
+          if (lo) setLoans(JSON.parse(lo.value));
+          if (b)  setMonthlyBalance(JSON.parse(b.value));
+        } catch(e) {}
+        setIsLoading(false);
+      };
+
+      const save = (key, data) => storageSet(`budget-${currentUser}-${key}`, JSON.stringify(data));
+
+      const handleSalaryUpdate = (v) => { setSalary(v); save('salary', v); };
+      const updateMonthlyBalance = (v) => { setMonthlyBalance(v); save('monthly-balance', v); };
+
+      const addFixedCost = (name, amount) => {
+        const n = [...fixedCosts, { id: Date.now(), name, amount: parseFloat(amount) }];
+        setFixedCosts(n); save('fixed-costs', n);
+      };
+      const removeFixedCost = (id) => { const n = fixedCosts.filter(c => c.id !== id); setFixedCosts(n); save('fixed-costs', n); };
+
+      const addSpending = (description, amount, category, date) => {
+        const newSpending = [...spending, { id: Date.now(), description, amount: parseFloat(amount), category, date: date || new Date().toISOString() }];
+        setSpending(newSpending); save('spending', newSpending);
+        if (category === 'Loan Payment') {
+          const matched = loans.find(l => l.currentBalance > 0 && description.toLowerCase().includes(l.name.toLowerCase()));
+          if (matched) {
+            const nl = loans.map(l => l.id === matched.id ? { ...l, currentBalance: Math.max(0, l.currentBalance - parseFloat(amount)) } : l);
+            setLoans(nl); save('loans', nl);
+          }
+        }
+      };
+      const removeSpending = (id) => { const n = spending.filter(s => s.id !== id); setSpending(n); save('spending', n); };
+
+      const addSavingsGoal = (name, target, current) => {
+        const n = [...savings, { id: Date.now(), name, target: parseFloat(target), current: parseFloat(current) || 0 }];
+        setSavings(n); save('savings', n);
+      };
+      const updateSavings = (id, amount) => {
+        const n = savings.map(s => s.id === id ? { ...s, current: s.current + parseFloat(amount) } : s);
+        setSavings(n); save('savings', n);
+      };
+      const removeSavingsGoal = (id) => { const n = savings.filter(s => s.id !== id); setSavings(n); save('savings', n); };
+
+      const addFuturePlan = (name, amount, monthsAhead) => {
+        const n = [...futurePlans, { id: Date.now(), name, amount: parseFloat(amount), monthsAhead: parseInt(monthsAhead) }];
+        setFuturePlans(n); save('future-plans', n);
+      };
+      const removeFuturePlan = (id) => { const n = futurePlans.filter(p => p.id !== id); setFuturePlans(n); save('future-plans', n); };
+
+      const addLoan = (name, principal, interestRate, monthlyPayment) => {
+        const nl = [...loans, { id: Date.now(), name, principal: parseFloat(principal), currentBalance: parseFloat(principal), interestRate: parseFloat(interestRate), monthlyPayment: parseFloat(monthlyPayment), startDate: new Date().toISOString() }];
+        setLoans(nl); save('loans', nl);
+      };
+      const removeLoan = (id) => { const n = loans.filter(l => l.id !== id); setLoans(n); save('loans', n); };
+
+      const totalFixedCosts = fixedCosts.reduce((s,c) => s+c.amount, 0);
+      const totalSavingsCurrent = savings.reduce((s,g) => s+g.current, 0);
+      const now = new Date();
+      const thisMonthSpendingTotal = spending
+        .filter(s => { const d = new Date(s.date); return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear(); })
+        .reduce((s,e) => s+e.amount, 0);
+      const freeCash = monthlyBalance + salary - totalFixedCosts - thisMonthSpendingTotal;
+
+      const tabs = [
+        { id: 'dashboard', label: 'Dashboard', icon: DollarSign },
+        { id: 'spending',  label: 'Spending',  icon: TrendingDown },
+        { id: 'savings',   label: 'Savings',   icon: PiggyBank },
+        { id: 'loans',     label: 'Loans',     icon: CreditCard },
+        { id: 'future',    label: 'Future',    icon: Calendar },
+        { id: 'setup',     label: 'Setup',     icon: Settings },
+      ];
+
+      if (isLoading) return (
+        <div className="flex items-center justify-center h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
+            <p className="text-gray-600">Loading your data...</p>
+          </div>
+        </div>
+      );
+
+      const sharedProps = { salary, totalFixedCosts, totalSavingsCurrent, freeCash, fixedCosts, spending, savings, loans, futurePlans, monthlyBalance, updateMonthlyBalance, addSpending, addFixedCost, removeFixedCost, addSavingsGoal, updateSavings, removeSavingsGoal, addFuturePlan, removeFuturePlan, addLoan, removeLoan, handleSalaryUpdate };
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
+          <div className="max-w-5xl mx-auto p-4 md:p-6">
+            {/* Header */}
+            <div className="bg-white rounded-2xl shadow-sm p-5 mb-4 flex items-center justify-between">
+              <div>
+                <h1 className="text-2xl font-bold text-gray-800">Simple Budget Tracker</h1>
+                <p className="text-gray-500 text-sm mt-0.5">Welcome back, <span className="font-semibold text-indigo-600">{currentUser}</span></p>
+              </div>
+              <button onClick={onLogout} className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors font-medium text-sm">
+                {React.createElement(LogOut, { size: 16 })} Logout
+              </button>
+            </div>
+
+            {/* Tabs */}
+            <div className="bg-white rounded-2xl shadow-sm mb-4 overflow-hidden">
+              <div className="flex overflow-x-auto">
+                {tabs.map(tab => (
+                  <button key={tab.id} onClick={() => setActiveTab(tab.id)}
+                    className={`flex items-center gap-2 px-5 py-3.5 font-medium transition-colors whitespace-nowrap text-sm ${activeTab === tab.id ? 'bg-indigo-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}>
+                    {React.createElement(tab.icon, { size: 16 })} {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="bg-white rounded-2xl shadow-sm p-5 md:p-6">
+              {activeTab === 'dashboard' && <Dashboard {...sharedProps} />}
+              {activeTab === 'spending'  && <SpendingTab  spending={spending}  addSpending={addSpending}  removeSpending={removeSpending} />}
+              {activeTab === 'savings'   && <SavingsTab   savings={savings}    addSavingsGoal={addSavingsGoal} updateSavings={updateSavings} removeSavingsGoal={removeSavingsGoal} />}
+              {activeTab === 'loans'     && <LoansTab     loans={loans}        addLoan={addLoan}     removeLoan={removeLoan} />}
+              {activeTab === 'future'    && <FuturePlansTab futurePlans={futurePlans} addFuturePlan={addFuturePlan} removeFuturePlan={removeFuturePlan} salary={salary} totalFixedCosts={totalFixedCosts} />}
+              {activeTab === 'setup'     && <SetupTab     salary={salary}      handleSalaryUpdate={handleSalaryUpdate} fixedCosts={fixedCosts} addFixedCost={addFixedCost} removeFixedCost={removeFixedCost} monthlyBalance={monthlyBalance} updateMonthlyBalance={updateMonthlyBalance} />}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Metric Card ─────────────────────────────────────────────────────────
+    function MetricCard({ title, value, color }) {
+      const c = { green:'bg-green-50 text-green-700 border-green-200', red:'bg-red-50 text-red-700 border-red-200', orange:'bg-orange-50 text-orange-700 border-orange-200', blue:'bg-blue-50 text-blue-700 border-blue-200', purple:'bg-purple-50 text-purple-700 border-purple-200' };
+      return (
+        <div className={`border-2 rounded-xl p-4 ${c[color]}`}>
+          <p className="text-xs font-medium opacity-70 mb-1 uppercase tracking-wide">{title}</p>
+          <p className="text-xl font-bold">KES {value.toLocaleString()}</p>
+        </div>
+      );
+    }
+
+    // ─── Dashboard ───────────────────────────────────────────────────────────
+    function Dashboard({ salary, totalFixedCosts, totalSavingsCurrent, freeCash, fixedCosts, spending, savings, loans, futurePlans, monthlyBalance, updateMonthlyBalance, addSpending }) {
+      const [showRecon, setShowRecon] = useState(false);
+      const [bank, setBank] = useState('');
+      const [cash, setCash] = useState('');
+      const [mpesa, setMpesa] = useState('');
+      const [reconCosts, setReconCosts] = useState([]);
+      const [missedExp, setMissedExp] = useState([]);
+      const [editingCost, setEditingCost] = useState(null);
+      const [reconciled, setReconciled] = useState(false);
+      const [showSpending, setShowSpending] = useState(false);
+      const [selectedMonth, setSelectedMonth] = useState(0);
+
+      const now = new Date();
+      const currentMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const viewingMonth = new Date(currentMonth);
+      viewingMonth.setMonth(viewingMonth.getMonth() - selectedMonth);
+      const monthName = viewingMonth.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+
+      const thisMonthSpending = spending.filter(s => {
+        const d = new Date(s.date);
+        return d.getMonth() === viewingMonth.getMonth() && d.getFullYear() === viewingMonth.getFullYear();
+      });
+      const thisMonthTotal = thisMonthSpending.reduce((s,e) => s+e.amount, 0);
+
+      const adjustedFixed = reconCosts.length > 0 ? reconCosts.reduce((s,c) => s+c.amount, 0) : totalFixedCosts;
+      const missedTotal = missedExp.reduce((s,e) => s+e.amount, 0);
+      const actualCash = parseFloat(bank||0) + parseFloat(cash||0) + parseFloat(mpesa||0);
+      const expectedCash = monthlyBalance + salary - adjustedFixed - thisMonthTotal - missedTotal - totalSavingsCurrent;
+      const diff = actualCash - expectedCash;
+      const isBalanced = Math.abs(diff) < 0.01;
+
+      const monthOptions = Array.from({length:6},(_,i) => {
+        const d = new Date(currentMonth); d.setMonth(d.getMonth()-i);
+        return { value: i, label: d.toLocaleDateString('en-US', { month:'long', year:'numeric' }) };
+      });
+
+      const handleReconcile = async () => {
+        if (actualCash > 0) {
+          for (const e of missedExp) await addSpending(e.description, e.amount, 'Other', e.date);
+          updateMonthlyBalance(actualCash);
+          setReconciled(true);
+          setTimeout(() => { setShowRecon(false); setReconciled(false); setBank(''); setCash(''); setMpesa(''); setReconCosts([]); setMissedExp([]); }, 2000);
+        }
+      };
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-gray-800">Financial Overview</h2>
+
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            <MetricCard title="Opening Balance" value={monthlyBalance} color="purple" />
+            <MetricCard title="Monthly Salary"  value={salary}        color="green" />
+            <MetricCard title="Fixed Costs"     value={totalFixedCosts} color="red" />
+            <MetricCard title="This Month"      value={thisMonthTotal} color="orange" />
+            <MetricCard title="Available"       value={freeCash}      color={freeCash>=0?'blue':'red'} />
+          </div>
+
+          {/* Summary */}
+          <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-200 rounded-xl p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
+                {React.createElement(TrendingUp, { size:20, className:"text-indigo-600" })} {monthName} Summary
+              </h3>
+              <select value={selectedMonth} onChange={e => setSelectedMonth(parseInt(e.target.value))}
+                className="px-3 py-1 border border-indigo-300 rounded-lg text-sm bg-white outline-none">
+                {monthOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+              <div><p className="text-gray-500 mb-1">Total Income</p><p className="text-lg font-bold text-green-700">KES {(monthlyBalance+salary).toLocaleString()}</p></div>
+              <div><p className="text-gray-500 mb-1">Total Expenses</p><p className="text-lg font-bold text-red-700">KES {(totalFixedCosts+thisMonthTotal).toLocaleString()}</p></div>
+              <div><p className="text-gray-500 mb-1">Total Saved</p><p className="text-lg font-bold text-blue-700">KES {totalSavingsCurrent.toLocaleString()}</p></div>
+              <div><p className="text-gray-500 mb-1">Expected Balance</p><p className="text-lg font-bold text-purple-700">KES {freeCash.toLocaleString()}</p></div>
+            </div>
+          </div>
+
+          {/* Reconciliation */}
+          {selectedMonth === 0 && (
+            <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-200 rounded-xl p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-base font-bold text-gray-800 flex items-center gap-2">
+                  {React.createElement(CheckCircle, { size:20, className:"text-green-600" })} Month-End Reconciliation
+                </h3>
+                {!showRecon && (
+                  <button onClick={() => { setReconCosts(fixedCosts.map(c=>({...c}))); setMissedExp([]); setShowRecon(true); }}
+                    className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition-colors">
+                    Start
+                  </button>
+                )}
+              </div>
+              {!showRecon ? (
+                <p className="text-sm text-gray-600">At month-end, reconcile your actual cash with the app's figures.</p>
+              ) : (
+                <ReconciliationForm
+                  reconCosts={reconCosts} editingCost={editingCost} setEditingCost={setEditingCost}
+                  onUpdateCost={(id,v) => { setReconCosts(prev => prev.map(c => c.id===id?{...c,amount:parseFloat(v)}:c)); setEditingCost(null); }}
+                  adjustedFixed={adjustedFixed} missedExp={missedExp}
+                  onAddMissed={(d,a,dt) => setMissedExp(prev=>[...prev,{id:Date.now(),description:d,amount:parseFloat(a),date:dt}])}
+                  onRemoveMissed={(id) => setMissedExp(prev=>prev.filter(e=>e.id!==id))}
+                  bank={bank} setBank={setBank} cash={cash} setCash={setCash} mpesa={mpesa} setMpesa={setMpesa}
+                  actualCash={actualCash} expectedCash={expectedCash} diff={diff} isBalanced={isBalanced}
+                  onReconcile={handleReconcile} reconciled={reconciled}
+                  onCancel={() => { setShowRecon(false); setBank(''); setCash(''); setMpesa(''); setReconCosts([]); setMissedExp([]); }}
+                />
+              )}
+            </div>
+          )}
+
+          {/* Spending collapsible */}
+          <div className="bg-gray-50 rounded-xl p-4">
+            <button onClick={() => setShowSpending(!showSpending)} className="w-full flex items-center justify-between">
+              <h3 className="font-semibold text-gray-800 flex items-center gap-2 text-sm">
+                {React.createElement(TrendingDown,{size:18})} {monthName} Spending ({thisMonthSpending.length} transactions)
+              </h3>
+              {React.createElement(showSpending ? ChevronUp : ChevronDown, {size:18})}
+            </button>
+            {showSpending && (
+              <div className="mt-3 space-y-2 max-h-80 overflow-y-auto">
+                {thisMonthSpending.length > 0 ? thisMonthSpending.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(s => (
+                  <div key={s.id} className="bg-white rounded-lg p-3 flex justify-between items-start text-sm">
+                    <div>
+                      <p className="font-medium text-gray-800">{s.description}</p>
+                      <p className="text-xs text-gray-400">{new Date(s.date).toLocaleDateString('en-GB')} · {s.category}</p>
+                    </div>
+                    <p className="font-bold text-gray-800">KES {s.amount.toLocaleString()}</p>
+                  </div>
+                )) : <p className="text-sm text-gray-400 text-center py-4">No spending this month</p>}
+              </div>
+            )}
+          </div>
+
+          {/* Loan progress */}
+          {loans.length > 0 && (
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2 text-sm">
+                {React.createElement(CreditCard,{size:18})} Loan Progress
+              </h3>
+              <div className="space-y-3">
+                {loans.map(loan => {
+                  const pct = ((loan.principal - loan.currentBalance) / loan.principal) * 100;
+                  return (
+                    <div key={loan.id} className="bg-white rounded-lg p-3">
+                      <div className="flex justify-between text-sm mb-2">
+                        <p className="font-medium text-gray-800">{loan.name}</p>
+                        <span className="text-indigo-600 font-medium">{Math.round(pct)}%</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div className="bg-indigo-600 h-2 rounded-full transition-all" style={{width:`${pct}%`}}></div>
+                      </div>
+                      <p className="text-xs text-gray-400 mt-1">Balance: KES {loan.currentBalance.toLocaleString()} · KES {loan.monthlyPayment.toLocaleString()}/mo</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Future plans */}
+          {futurePlans.length > 0 && (
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2 text-sm">
+                {React.createElement(Calendar,{size:18})} Upcoming Plans
+              </h3>
+              <div className="space-y-2">
+                {futurePlans.sort((a,b)=>a.monthsAhead-b.monthsAhead).slice(0,3).map(plan => {
+                  const td = new Date(); td.setMonth(td.getMonth()+plan.monthsAhead);
+                  return (
+                    <div key={plan.id} className="bg-white rounded-lg p-3 flex justify-between items-center text-sm">
+                      <div>
+                        <p className="font-medium text-gray-800">{plan.name}</p>
+                        <p className="text-xs text-gray-400">{td.toLocaleDateString('en-US',{month:'short',year:'numeric'})} · Save KES {Math.round(plan.amount/plan.monthsAhead).toLocaleString()}/mo</p>
+                      </div>
+                      <p className="font-bold text-purple-600">KES {plan.amount.toLocaleString()}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Fixed costs + Savings summary */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h3 className="font-semibold text-gray-800 mb-3 text-sm">Fixed Costs ({fixedCosts.length})</h3>
+              {fixedCosts.length > 0 ? (
+                <div className="space-y-1.5">
+                  {fixedCosts.slice(0,5).map(c => (
+                    <div key={c.id} className="flex justify-between text-sm"><span className="text-gray-500">{c.name}</span><span className="font-medium">KES {c.amount.toLocaleString()}</span></div>
+                  ))}
+                  {fixedCosts.length>5 && <p className="text-xs text-gray-400">+{fixedCosts.length-5} more</p>}
+                </div>
+              ) : <p className="text-sm text-gray-400">None added</p>}
+            </div>
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h3 className="font-semibold text-gray-800 mb-3 text-sm">Savings Goals ({savings.length})</h3>
+              {savings.length > 0 ? (
+                <div className="space-y-3">
+                  {savings.slice(0,3).map(s => (
+                    <div key={s.id}>
+                      <div className="flex justify-between text-sm mb-1"><span className="text-gray-500">{s.name}</span><span className="font-medium">{Math.round((s.current/s.target)*100)}%</span></div>
+                      <div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-green-500 h-1.5 rounded-full" style={{width:`${Math.min((s.current/s.target)*100,100)}%`}}></div></div>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="text-sm text-gray-400">No goals set</p>}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Reconciliation Form ─────────────────────────────────────────────────
+    function ReconciliationForm({ reconCosts, editingCost, setEditingCost, onUpdateCost, adjustedFixed, missedExp, onAddMissed, onRemoveMissed, bank, setBank, cash, setCash, mpesa, setMpesa, actualCash, expectedCash, diff, isBalanced, onReconcile, reconciled, onCancel }) {
+      const [desc, setDesc] = useState('');
+      const [amt, setAmt] = useState('');
+      const [dt, setDt] = useState(new Date().toISOString().split('T')[0]);
+
+      return (
+        <div className="space-y-4 mt-4">
+          {/* Step 1 */}
+          <div className="bg-white rounded-xl p-4">
+            <p className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+              {React.createElement(Edit2,{size:16,className:"text-indigo-600"})} Step 1: Review Fixed Expenses
+            </p>
+            <div className="space-y-2 max-h-40 overflow-y-auto">
+              {reconCosts.map(c => (
+                <div key={c.id} className="flex items-center justify-between bg-gray-50 rounded-lg p-2 text-sm">
+                  <span className="text-gray-700">{c.name}</span>
+                  <div className="flex items-center gap-2">
+                    {editingCost===c.id ? (
+                      <>
+                        <input type="number" defaultValue={c.amount} autoFocus
+                          onBlur={e=>onUpdateCost(c.id,e.target.value)}
+                          onKeyDown={e=>e.key==='Enter'&&onUpdateCost(c.id,e.target.value)}
+                          className="w-24 px-2 py-1 border border-gray-300 rounded text-sm outline-none" />
+                        <button onClick={()=>setEditingCost(null)} className="text-gray-400">✓</button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="font-medium">KES {c.amount.toLocaleString()}</span>
+                        <button onClick={()=>setEditingCost(c.id)} className="text-indigo-500 p-1">{React.createElement(Edit2,{size:13})}</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 pt-3 border-t flex justify-between text-sm"><span className="font-medium text-gray-700">Total</span><span className="font-bold">KES {adjustedFixed.toLocaleString()}</span></div>
+          </div>
+
+          {/* Step 2 */}
+          <div className="bg-white rounded-xl p-4">
+            <p className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+              {React.createElement(Plus,{size:16,className:"text-orange-500"})} Step 2: Add Missed Expenses
+            </p>
+            <div className="grid grid-cols-3 gap-2 mb-2">
+              <input type="text" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Description" className="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none" />
+              <input type="number" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="Amount" className="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none" />
+              <input type="date" value={dt} onChange={e=>setDt(e.target.value)} className="px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none" />
+            </div>
+            <button onClick={()=>{ if(desc&&amt){onAddMissed(desc,amt,dt);setDesc('');setAmt('');} }}
+              className="w-full bg-orange-500 text-white py-2 rounded-lg text-sm font-medium hover:bg-orange-600 transition-colors">Add Missed Expense</button>
+            {missedExp.map(e => (
+              <div key={e.id} className="flex justify-between items-center bg-orange-50 rounded-lg p-2 mt-2 text-sm">
+                <span className="text-gray-700">{e.description} — KES {e.amount.toLocaleString()}</span>
+                <button onClick={()=>onRemoveMissed(e.id)} className="text-red-500">{React.createElement(Trash2,{size:14})}</button>
+              </div>
+            ))}
+          </div>
+
+          {/* Step 3 */}
+          <div className="bg-white rounded-xl p-4">
+            <p className="text-sm font-medium text-gray-700 mb-3">Step 3: Enter actual balances</p>
+            <div className="grid grid-cols-3 gap-3">
+              {[['Bank Balance', bank, setBank], ['Cash in Hand', cash, setCash], ['M-Pesa', mpesa, setMpesa]].map(([label, val, set]) => (
+                <div key={label}>
+                  <label className="block text-xs text-gray-500 mb-1">{label}</label>
+                  <input type="number" value={val} onChange={e=>set(e.target.value)} placeholder="0"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none" />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Step 4 */}
+          {actualCash > 0 && (
+            <div className="bg-white rounded-xl p-4 space-y-3">
+              <p className="text-sm font-medium text-gray-700">Step 4: Review</p>
+              <div className="grid grid-cols-3 gap-4 text-sm">
+                <div><p className="text-gray-400">Expected</p><p className="font-bold text-lg">KES {expectedCash.toLocaleString()}</p></div>
+                <div><p className="text-gray-400">Actual</p><p className="font-bold text-lg">KES {actualCash.toLocaleString()}</p></div>
+                <div><p className="text-gray-400">Difference</p><p className={`font-bold text-lg ${diff>=0?'text-green-600':'text-red-600'}`}>KES {Math.abs(diff).toLocaleString()} {diff>=0?'surplus':'short'}</p></div>
+              </div>
+              {isBalanced
+                ? <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex gap-2 text-sm"><span className="text-green-600 font-medium">Perfect match!</span></div>
+                : <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">There's a discrepancy. Check for missed expenses or adjust fixed costs above.</div>
+              }
+              <div className="flex gap-3">
+                <button onClick={onReconcile} className="flex-1 bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 transition-colors text-sm">
+                  Reconcile & Carry Forward (KES {actualCash.toLocaleString()})
+                </button>
+                <button onClick={onCancel} className="px-5 bg-gray-100 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-200 transition-colors text-sm">Cancel</button>
+              </div>
+              {reconciled && <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-800 text-center font-medium">Reconciled! Opening balance updated.</div>}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Spending Tab ────────────────────────────────────────────────────────
+    function SpendingTab({ spending, addSpending, removeSpending }) {
+      const [desc, setDesc] = useState('');
+      const [amt, setAmt] = useState('');
+      const [cat, setCat] = useState('Other');
+      const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+      const cats = ['Food','Transport','Entertainment','Shopping','Bills','Loan Payment','Other'];
+      const now = new Date();
+      const thisMonth = spending.filter(s => { const d=new Date(s.date); return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear(); });
+      const total = thisMonth.reduce((s,e)=>s+e.amount,0);
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-gray-800">Track Spending</h2>
+          <div className="bg-indigo-50 border-2 border-indigo-200 rounded-xl p-4">
+            <p className="text-sm text-indigo-600 font-medium">This Month</p>
+            <p className="text-3xl font-bold text-indigo-900">KES {total.toLocaleString()}</p>
+            <p className="text-xs text-indigo-400 mt-1">{thisMonth.length} transactions</p>
+          </div>
+          <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">What did you spend on?</label>
+              <input type="text" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="e.g., Lunch at Java House"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (KES)</label>
+                <input type="number" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="0"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                <select value={cat} onChange={e=>setCat(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400">
+                  {cats.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+                <input type="date" value={date} onChange={e=>setDate(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+              </div>
+            </div>
+            {cat==='Loan Payment' && (
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700">
+                💡 Include the loan name in the description to auto-reduce its balance (e.g. "Stanchart Personal Loan payment")
+              </div>
+            )}
+            <button onClick={()=>{ if(desc&&amt){addSpending(desc,amt,cat,date);setDesc('');setAmt('');setCat('Other');setDate(new Date().toISOString().split('T')[0]);} }}
+              className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 text-sm">
+              {React.createElement(Plus,{size:18})} Add Spending
+            </button>
+          </div>
+          <div>
+            <h3 className="font-semibold text-gray-700 mb-3 text-sm">Spending History</h3>
+            {spending.length > 0 ? (
+              <div className="space-y-2">
+                {spending.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(s => (
+                  <div key={s.id} className="bg-gray-50 rounded-xl p-3.5 flex items-center justify-between">
+                    <div>
+                      <p className="font-medium text-gray-800 text-sm">{new Date(s.date).toLocaleDateString('en-GB')} — {s.description}</p>
+                      <p className="text-xs text-gray-400">{s.category}</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <p className="font-bold text-gray-800 text-sm">KES {s.amount.toLocaleString()}</p>
+                      <button onClick={()=>removeSpending(s.id)} className="text-red-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50 transition-colors">{React.createElement(Trash2,{size:16})}</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-gray-400 text-center py-10 text-sm">No spending recorded yet</p>}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Savings Tab ─────────────────────────────────────────────────────────
+    function SavingsTab({ savings, addSavingsGoal, updateSavings, removeSavingsGoal }) {
+      const [name, setName] = useState('');
+      const [target, setTarget] = useState('');
+      const [addAmt, setAddAmt] = useState({});
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-gray-800">Savings Goals</h2>
+          <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Goal Name</label>
+              <input type="text" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g., Emergency Fund"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-400" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Target Amount (KES)</label>
+              <input type="number" value={target} onChange={e=>setTarget(e.target.value)} placeholder="0"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-400" />
+            </div>
+            <button onClick={()=>{ if(name&&target){addSavingsGoal(name,target,0);setName('');setTarget('');} }}
+              className="w-full bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 transition-colors flex items-center justify-center gap-2 text-sm">
+              {React.createElement(Plus,{size:18})} Create Goal
+            </button>
+          </div>
+          <div className="space-y-4">
+            <h3 className="font-semibold text-gray-700 text-sm">Your Goals</h3>
+            {savings.length > 0 ? savings.map(s => {
+              const pct = (s.current/s.target)*100;
+              return (
+                <div key={s.id} className="bg-gray-50 rounded-xl p-4 space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div><h4 className="font-semibold text-gray-800">{s.name}</h4><p className="text-sm text-gray-400">KES {s.current.toLocaleString()} of KES {s.target.toLocaleString()}</p></div>
+                    <button onClick={()=>removeSavingsGoal(s.id)} className="text-red-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50">{React.createElement(Trash2,{size:16})}</button>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs text-gray-400 mb-1"><span>Progress</span><span>{Math.round(pct)}%</span></div>
+                    <div className="w-full bg-gray-200 rounded-full h-2.5"><div className="bg-green-500 h-2.5 rounded-full transition-all" style={{width:`${Math.min(pct,100)}%`}}></div></div>
+                  </div>
+                  <div className="flex gap-2">
+                    <input type="number" value={addAmt[s.id]||''} onChange={e=>setAddAmt({...addAmt,[s.id]:e.target.value})} placeholder="Add amount..."
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none" />
+                    <button onClick={()=>{ if(addAmt[s.id]){updateSavings(s.id,addAmt[s.id]);setAddAmt({...addAmt,[s.id]:''}); } }}
+                      className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Add</button>
+                  </div>
+                </div>
+              );
+            }) : <p className="text-gray-400 text-center py-10 text-sm">No savings goals yet</p>}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Loans Tab ───────────────────────────────────────────────────────────
+    function LoansTab({ loans, addLoan, removeLoan }) {
+      const [name, setName] = useState('');
+      const [principal, setPrincipal] = useState('');
+      const [rate, setRate] = useState('');
+      const [payment, setPayment] = useState('');
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-gray-800">Loan Tracking</h2>
+          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-800">
+            💡 When adding a Loan Payment in Spending, include the loan name in the description to auto-reduce its balance.
+          </div>
+          <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Loan Name</label>
+              <input type="text" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g., Car Loan, Personal Loan"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Principal (KES)</label>
+                <input type="number" value={principal} onChange={e=>setPrincipal(e.target.value)} placeholder="0"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Interest Rate % (optional)</label>
+                <input type="number" value={rate} onChange={e=>setRate(e.target.value)} placeholder="0" step="0.1"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Monthly Payment (KES)</label>
+              <input type="number" value={payment} onChange={e=>setPayment(e.target.value)} placeholder="0"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+            </div>
+            <button onClick={()=>{ if(name&&principal&&payment){addLoan(name,principal,rate||0,payment);setName('');setPrincipal('');setRate('');setPayment('');} }}
+              className="w-full bg-indigo-600 text-white py-3 rounded-lg font-medium hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 text-sm">
+              {React.createElement(Plus,{size:18})} Add Loan
+            </button>
+          </div>
+          <div className="space-y-4">
+            <h3 className="font-semibold text-gray-700 text-sm">Your Loans</h3>
+            {loans.length > 0 ? loans.map(loan => {
+              const pct = ((loan.principal-loan.currentBalance)/loan.principal)*100;
+              const paid = loan.principal-loan.currentBalance;
+              const months = loan.monthlyPayment > 0 ? Math.ceil(loan.currentBalance/loan.monthlyPayment) : 0;
+              return (
+                <div key={loan.id} className="bg-gray-50 rounded-xl p-4 space-y-3">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4 className="font-semibold text-gray-800">{loan.name}</h4>
+                      <p className="text-xs text-gray-400">Started {new Date(loan.startDate).toLocaleDateString()}{loan.interestRate>0?` · ${loan.interestRate}% p.a.`:''}</p>
+                    </div>
+                    <button onClick={()=>removeLoan(loan.id)} className="text-red-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50">{React.createElement(Trash2,{size:16})}</button>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div className="bg-white rounded-lg p-2 text-center"><p className="text-xs text-gray-400">Principal</p><p className="font-bold">KES {loan.principal.toLocaleString()}</p></div>
+                    <div className="bg-white rounded-lg p-2 text-center"><p className="text-xs text-gray-400">Paid</p><p className="font-bold text-green-600">KES {paid.toLocaleString()}</p></div>
+                    <div className="bg-white rounded-lg p-2 text-center"><p className="text-xs text-gray-400">Remaining</p><p className="font-bold text-red-500">KES {loan.currentBalance.toLocaleString()}</p></div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs text-gray-400 mb-1"><span>Progress</span><span>{Math.round(pct)}%</span></div>
+                    <div className="w-full bg-gray-200 rounded-full h-2.5"><div className="bg-indigo-600 h-2.5 rounded-full transition-all" style={{width:`${pct}%`}}></div></div>
+                  </div>
+                  <div className="bg-white rounded-lg p-3 text-sm flex justify-between">
+                    <span className="text-gray-400">Monthly payment</span><span className="font-bold">KES {loan.monthlyPayment.toLocaleString()}</span>
+                  </div>
+                  {months>0 && <p className="text-xs text-gray-400 text-right">~{months} months remaining</p>}
+                  {loan.currentBalance===0 && <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-700 font-medium text-center">Loan fully paid off!</div>}
+                </div>
+              );
+            }) : <p className="text-gray-400 text-center py-10 text-sm">No loans tracked yet</p>}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Future Plans Tab ────────────────────────────────────────────────────
+    function FuturePlansTab({ futurePlans, addFuturePlan, removeFuturePlan, salary, totalFixedCosts }) {
+      const [name, setName] = useState('');
+      const [amount, setAmount] = useState('');
+      const [months, setMonths] = useState('6');
+      const surplus = salary - totalFixedCosts;
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-gray-800">Future Planning</h2>
+          <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
+            <p className="text-sm text-blue-600 font-medium">Monthly Surplus (after fixed costs)</p>
+            <p className="text-3xl font-bold text-blue-900">KES {surplus.toLocaleString()}</p>
+          </div>
+          <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">What are you saving for?</label>
+              <input type="text" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g., New Phone, Holiday, Car Repair"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-purple-400" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount Needed (KES)</label>
+                <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-purple-400" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Months from Now</label>
+                <input type="number" value={months} onChange={e=>setMonths(e.target.value)} min="1" max="12"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-purple-400" />
+              </div>
+            </div>
+            <button onClick={()=>{ if(name&&amount&&months){addFuturePlan(name,amount,months);setName('');setAmount('');setMonths('6');} }}
+              className="w-full bg-purple-600 text-white py-3 rounded-lg font-medium hover:bg-purple-700 transition-colors flex items-center justify-center gap-2 text-sm">
+              {React.createElement(Plus,{size:18})} Add Plan
+            </button>
+          </div>
+          <div className="space-y-4">
+            <h3 className="font-semibold text-gray-700 text-sm">Your Plans</h3>
+            {futurePlans.length > 0 ? futurePlans.sort((a,b)=>a.monthsAhead-b.monthsAhead).map(plan => {
+              const mpm = plan.amount / plan.monthsAhead;
+              const td = new Date(); td.setMonth(td.getMonth()+plan.monthsAhead);
+              return (
+                <div key={plan.id} className="bg-gray-50 rounded-xl p-4">
+                  <div className="flex items-start justify-between mb-3">
+                    <div><h4 className="font-semibold text-gray-800">{plan.name}</h4><p className="text-xs text-gray-400">Target: {td.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</p></div>
+                    <button onClick={()=>removeFuturePlan(plan.id)} className="text-red-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50">{React.createElement(Trash2,{size:16})}</button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="bg-white rounded-lg p-3"><p className="text-xs text-gray-400 mb-1">Total Needed</p><p className="font-bold text-lg">KES {plan.amount.toLocaleString()}</p></div>
+                    <div className="bg-white rounded-lg p-3"><p className="text-xs text-gray-400 mb-1">Save Per Month</p><p className="font-bold text-lg">KES {Math.round(mpm).toLocaleString()}</p></div>
+                  </div>
+                  {mpm > surplus && (
+                    <div className="mt-3 bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-xs text-yellow-800">
+                      ⚠️ Requires more than your monthly surplus. Consider extending the timeline.
+                    </div>
+                  )}
+                </div>
+              );
+            }) : <p className="text-gray-400 text-center py-10 text-sm">No plans yet</p>}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Setup Tab ───────────────────────────────────────────────────────────
+    function SetupTab({ salary, handleSalaryUpdate, fixedCosts, addFixedCost, removeFixedCost, monthlyBalance, updateMonthlyBalance }) {
+      const [newSalary, setNewSalary] = useState(salary);
+      const [costName, setCostName] = useState('');
+      const [costAmt, setCostAmt] = useState('');
+      const [newBalance, setNewBalance] = useState(monthlyBalance);
+      const totalFixed = fixedCosts.reduce((s,c)=>s+c.amount,0);
+
+      return (
+        <div className="space-y-6">
+          <h2 className="text-2xl font-bold text-gray-800">Setup</h2>
+
+          {/* Opening balance */}
+          <div className="bg-gray-50 rounded-xl p-4">
+            <h3 className="font-semibold text-gray-700 mb-3">Opening Balance</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">This month's opening balance (KES)</label>
+                <input type="number" value={newBalance} onChange={e=>setNewBalance(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-purple-400" placeholder="0" />
+              </div>
+              <button onClick={()=>updateMonthlyBalance(parseFloat(newBalance))} className="w-full bg-purple-600 text-white py-2.5 rounded-lg font-medium hover:bg-purple-700 transition-colors text-sm">
+                Update Opening Balance
+              </button>
+            </div>
+            {monthlyBalance>0 && <p className="mt-3 text-sm text-purple-700 bg-purple-50 border border-purple-200 rounded-lg p-3">Current: <span className="font-bold">KES {monthlyBalance.toLocaleString()}</span></p>}
+          </div>
+
+          {/* Salary */}
+          <div className="bg-gray-50 rounded-xl p-4">
+            <h3 className="font-semibold text-gray-700 mb-3">Monthly Salary</h3>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Monthly salary (KES)</label>
+                <input type="number" value={newSalary} onChange={e=>setNewSalary(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" placeholder="0" />
+              </div>
+              <button onClick={()=>handleSalaryUpdate(parseFloat(newSalary))} className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 transition-colors text-sm">
+                Update Salary
+              </button>
+            </div>
+            {salary>0 && <p className="mt-3 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg p-3">Current: <span className="font-bold">KES {salary.toLocaleString()}</span></p>}
+          </div>
+
+          {/* Fixed costs */}
+          <div className="bg-gray-50 rounded-xl p-4">
+            <h3 className="font-semibold text-gray-700 mb-3">Fixed Monthly Costs</h3>
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Cost Name</label>
+                <input type="text" value={costName} onChange={e=>setCostName(e.target.value)} placeholder="e.g., Rent, Internet, Insurance"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Amount (KES)</label>
+                <input type="number" value={costAmt} onChange={e=>setCostAmt(e.target.value)} placeholder="0"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400" />
+              </div>
+              <button onClick={()=>{ if(costName&&costAmt){addFixedCost(costName,costAmt);setCostName('');setCostAmt('');} }}
+                className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2 text-sm">
+                {React.createElement(Plus,{size:18})} Add Fixed Cost
+              </button>
+            </div>
+            {fixedCosts.length>0 && (
+              <div className="space-y-2">
+                <div className="flex justify-between text-sm font-semibold text-gray-700 pb-2 border-b border-gray-200">
+                  <span>Total Fixed Costs</span><span>KES {totalFixed.toLocaleString()}</span>
+                </div>
+                {fixedCosts.map(c=>(
+                  <div key={c.id} className="bg-white rounded-lg p-3 flex items-center justify-between">
+                    <div><p className="font-medium text-gray-800 text-sm">{c.name}</p><p className="text-xs text-gray-400">KES {c.amount.toLocaleString()}</p></div>
+                    <button onClick={()=>removeFixedCost(c.id)} className="text-red-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50">{React.createElement(Trash2,{size:16})}</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ─── Mount ───────────────────────────────────────────────────────────────
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(React.createElement(BudgetTracker));
+  </script>
+</body>
+</html>
