@@ -48,6 +48,17 @@
     const sSet = (k,v) => localStorage.setItem(k,v);
     const sDel = k => localStorage.removeItem(k);
 
+    // ── Security helpers ───────────────────────────────────────────────────
+    // SHA-256 hash via Web Crypto API (built into all modern browsers, no library needed)
+    const hashPw = async (pw) => {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(pw));
+      return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
+    };
+    // Cryptographically random 32-byte hex token (used to verify session wasn't hand-crafted)
+    const makeToken = () =>
+      Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b=>b.toString(16).padStart(2,'0')).join('');
+    const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
     // ── Root ───────────────────────────────────────────────────────────────
     function App() {
       const [loggedIn, setLoggedIn] = useState(false);
@@ -55,16 +66,42 @@
       const [loading, setLoading] = useState(true);
 
       useEffect(() => {
-        try {
-          const s = sGet('budget-session');
-          if (s) { const d=JSON.parse(s.value); if(d.isLoggedIn&&d.username){setLoggedIn(true);setUser(d.username);} }
-        } catch(e) {}
-        setLoading(false);
+        (async () => {
+          try {
+            const s = sGet('budget-session');
+            if (s) {
+              const session = JSON.parse(s.value);
+              // 1. Check expiry
+              if (!session.createdAt || Date.now() - session.createdAt > SESSION_TTL_MS) {
+                sDel('budget-session');
+              } else {
+                // 2. Verify token matches what's stored in the user record — prevents forged sessions
+                const ud = sGet(`budget-user-${session.username.toLowerCase()}`);
+                if (ud) {
+                  const user = JSON.parse(ud.value);
+                  if (user.sessionToken && user.sessionToken === session.token) {
+                    setLoggedIn(true); setUser(session.username);
+                  } else {
+                    sDel('budget-session'); // token mismatch — forged or stale
+                  }
+                }
+              }
+            }
+          } catch(e) { sDel('budget-session'); }
+          setLoading(false);
+        })();
       }, []);
 
       if (loading) return <Spinner />;
       return loggedIn
-        ? <MainApp user={user} onLogout={()=>{sDel('budget-session');setLoggedIn(false);setUser('');}} />
+        ? <MainApp user={user} onLogout={()=>{
+            // Invalidate token in user record so forged sessions with old token stop working
+            try {
+              const ud = sGet(`budget-user-${user.toLowerCase()}`);
+              if (ud) { const u=JSON.parse(ud.value); sSet(`budget-user-${user.toLowerCase()}`, JSON.stringify({...u,sessionToken:null})); }
+            } catch(e) {}
+            sDel('budget-session'); setLoggedIn(false); setUser('');
+          }} />
         : <LoginScreen onLogin={u=>{setLoggedIn(true);setUser(u);}} />;
     }
 
@@ -86,25 +123,39 @@
       const [err, setErr] = useState(''); const [ok, setOk] = useState('');
       const [busy, setBusy] = useState(false);
 
-      const submit = () => {
+      const submit = async () => {
         setErr(''); setOk('');
         if (!un||!pw) { setErr('Enter username and password'); return; }
         if (un.length<3) { setErr('Username min 3 characters'); return; }
         if (pw.length<4) { setErr('Password min 4 characters'); return; }
         setBusy(true);
         const k = `budget-user-${un.toLowerCase()}`;
-        if (isReg) {
-          if (sGet(k)) { setErr('Username already taken'); setBusy(false); return; }
-          sSet(k, JSON.stringify({username:un,password:pw}));
-          sSet('budget-session', JSON.stringify({isLoggedIn:true,username:un}));
-          setOk('Account created!'); setTimeout(()=>onLogin(un),500);
-        } else {
-          const d=sGet(k);
-          if (!d) { setErr('Username not found. Register first.'); setBusy(false); return; }
-          if (JSON.parse(d.value).password!==pw) { setErr('Incorrect password'); setBusy(false); return; }
-          sSet('budget-session', JSON.stringify({isLoggedIn:true,username:un}));
-          setOk('Logged in!'); setTimeout(()=>onLogin(un),500);
-        }
+        try {
+          const hash = await hashPw(pw);
+          if (isReg) {
+            if (sGet(k)) { setErr('Username already taken'); setBusy(false); return; }
+            const token = makeToken();
+            // Store hashed password + session token — never the raw password
+            sSet(k, JSON.stringify({ username: un, passwordHash: hash, sessionToken: token }));
+            sSet('budget-session', JSON.stringify({ username: un, token, createdAt: Date.now() }));
+            setOk('Account created!'); setTimeout(()=>onLogin(un),500);
+          } else {
+            const d = sGet(k);
+            // Fix: same error for missing user and wrong password — prevents username enumeration
+            if (!d) { setErr('Invalid username or password'); setBusy(false); return; }
+            const userData = JSON.parse(d.value);
+            // Support legacy accounts that still have plaintext password (prompts re-register)
+            if (userData.password && !userData.passwordHash) {
+              setErr('Please re-register your account to upgrade security. Your data is still saved.'); setBusy(false); return;
+            }
+            if (userData.passwordHash !== hash) { setErr('Invalid username or password'); setBusy(false); return; }
+            const token = makeToken();
+            // Rotate token on every login — invalidates any previously forged/stolen session
+            sSet(k, JSON.stringify({ ...userData, sessionToken: token }));
+            sSet('budget-session', JSON.stringify({ username: un, token, createdAt: Date.now() }));
+            setOk('Logged in!'); setTimeout(()=>onLogin(un),500);
+          }
+        } catch(e) { setErr('An error occurred. Please try again.'); setBusy(false); }
       };
 
       return (
