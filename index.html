@@ -65,16 +65,9 @@
       const [loggedIn, setLoggedIn] = useState(false);
       const [user, setUser] = useState('');
       const [loading, setLoading] = useState(true);
-      const [needsAdminSetup, setNeedsAdminSetup] = useState(false);
 
       useEffect(() => {
         (async () => {
-          // First-run check: if the admin account doesn't exist yet, show setup screen
-          if (!sGet(`budget-user-${ADMIN}`)) {
-            setNeedsAdminSetup(true);
-            setLoading(false);
-            return;
-          }
           try {
             const s = sGet('budget-session');
             if (s) {
@@ -107,7 +100,6 @@
       };
 
       if (loading) return <Spinner />;
-      if (needsAdminSetup) return <AdminSetup onDone={()=>{setNeedsAdminSetup(false);}} />;
       if (!loggedIn) return <LoginScreen onLogin={u=>{setLoggedIn(true);setUser(u);}} />;
       return <MainApp user={user} isAdmin={user.toLowerCase()===ADMIN} onLogout={doLogout} />;
     }
@@ -118,59 +110,6 @@
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto mb-4"></div>
             <p className="text-gray-500 text-sm">Loading…</p>
-          </div>
-        </div>
-      );
-    }
-
-    // ── Admin first-run setup ──────────────────────────────────────────────
-    // Only shown once — when no admin account exists yet (fresh deploy)
-    function AdminSetup({ onDone }) {
-      const [pw, setPw] = useState(''); const [pw2, setPw2] = useState('');
-      const [err, setErr] = useState(''); const [busy, setBusy] = useState(false);
-
-      const create = async () => {
-        setErr('');
-        if (pw.length < 6) { setErr('Password must be at least 6 characters'); return; }
-        if (pw !== pw2) { setErr('Passwords do not match'); return; }
-        setBusy(true);
-        try {
-          const hash = await hashPw(pw);
-          sSet(`budget-user-${ADMIN}`, JSON.stringify({ username: ADMIN, passwordHash: hash, sessionToken: null, isAdmin: true }));
-          onDone();
-        } catch(e) { setErr('Something went wrong. Please try again.'); setBusy(false); }
-      };
-
-      return (
-        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
-            <div className="text-center mb-8">
-              <div className="inline-flex items-center justify-center w-16 h-16 bg-indigo-100 rounded-full mb-4">
-                <Icons.Settings size={28} className="text-indigo-600" />
-              </div>
-              <h1 className="text-2xl font-bold text-gray-800">First-time Setup</h1>
-              <p className="text-gray-400 text-sm mt-2">Set a password for the admin account <span className="font-semibold text-indigo-600">{ADMIN}</span></p>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Admin password</label>
-                <input type="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==='Enter'&&create()}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"
-                  placeholder="Choose a strong password" disabled={busy} autoFocus />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Confirm password</label>
-                <input type="password" value={pw2} onChange={e=>setPw2(e.target.value)} onKeyDown={e=>e.key==='Enter'&&create()}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"
-                  placeholder="Repeat password" disabled={busy} />
-              </div>
-              {err && <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">{err}</div>}
-              <button onClick={create} disabled={busy}
-                className="w-full bg-indigo-600 text-white py-3 rounded-xl font-medium hover:bg-indigo-700 transition-colors text-sm disabled:opacity-50">
-                {busy ? 'Setting up…' : 'Create Admin Account'}
-              </button>
-            </div>
-            <p className="text-xs text-gray-400 text-center mt-6">This screen only appears once, on first use.</p>
           </div>
         </div>
       );
