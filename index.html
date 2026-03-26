@@ -77,15 +77,15 @@
 
     // ── Root ──────────────────────────────────────────────────────────────
     function App() {
-      const [status, setStatus] = useState('loading'); // loading | setup | login | app
+      const [status, setStatus] = useState('loading'); // loading | setup | login | force-reset | app
       const [user, setUser] = useState('');
       const [isAdmin, setIsAdmin] = useState(false);
       const [apiErr, setApiErr] = useState('');
+      const [pendingToken, setPendingToken] = useState(null); // held until password changed
 
       useEffect(() => { init(); }, []);
 
       const init = async () => {
-        // Check if backend is reachable and whether admin setup is needed
         try {
           const { needed } = await api('GET', '/api/setup-needed');
           if (needed) { setStatus('setup'); return; }
@@ -95,28 +95,43 @@
           return;
         }
 
-        // Try to restore session from stored JWT
         if (_token) {
           try {
             const me = await api('GET', '/api/me');
-            setUser(me.username); setIsAdmin(me.isAdmin); setStatus('app'); return;
+            setUser(me.username); setIsAdmin(me.isAdmin);
+            if (me.mustChangePassword) { setStatus('force-reset'); return; }
+            setStatus('app'); return;
           } catch { setToken(null); }
         }
         setStatus('login');
       };
 
-      const handleLogin = (username, isAdminFlag) => {
-        setUser(username); setIsAdmin(isAdminFlag); setStatus('app');
+      const handleLogin = (username, isAdminFlag, mustChange, token) => {
+        setUser(username); setIsAdmin(isAdminFlag);
+        if (mustChange) {
+          // Store token so the change-password screen can call /api/change-password
+          setPendingToken(token);
+          setStatus('force-reset');
+        } else {
+          setStatus('app');
+        }
+      };
+
+      const handlePasswordChanged = () => {
+        // Token already stored from login — just enter the app
+        setPendingToken(null);
+        setStatus('app');
       };
 
       const handleLogout = () => {
         setToken(null); setUser(''); setIsAdmin(false); setStatus('login');
       };
 
-      if (status === 'loading') return <Spinner msg="Connecting…" />;
-      if (status === 'error')   return <ErrorScreen msg={apiErr} />;
-      if (status === 'setup')   return <AdminSetup onDone={() => setStatus('login')} />;
-      if (status === 'login')   return <LoginScreen onLogin={handleLogin} />;
+      if (status === 'loading')      return <Spinner msg="Connecting…" />;
+      if (status === 'error')        return <ErrorScreen msg={apiErr} />;
+      if (status === 'setup')        return <AdminSetup onDone={() => setStatus('login')} />;
+      if (status === 'login')        return <LoginScreen onLogin={handleLogin} />;
+      if (status === 'force-reset')  return <ForcePasswordReset username={user} onDone={handlePasswordChanged} onLogout={handleLogout} />;
       return <MainApp user={user} isAdmin={isAdmin} onLogout={handleLogout} />;
     }
 
@@ -216,9 +231,9 @@
         if (!un || !pw) { setErr('Enter username and password'); return; }
         setBusy(true);
         try {
-          const { token, username, isAdmin } = await api('POST', '/api/login', { username: un, password: pw });
-          setToken(token);
-          onLogin(username, isAdmin);
+          const res = await api('POST', '/api/login', { username: un, password: pw });
+          setToken(res.token);
+          onLogin(res.username, res.isAdmin, res.mustChangePassword, res.token);
         } catch(e) { setErr(e.message); setBusy(false); }
       };
 
@@ -252,6 +267,83 @@
               </button>
             </div>
             <p className="text-xs text-gray-400 text-center mt-6">Contact the admin to get an account.</p>
+          </div>
+        </div>
+      );
+    }
+
+    // ── Force Password Reset ──────────────────────────────────────────────
+    // Shown on first login (or after admin resets password). User cannot
+    // enter the app until they set a password of their own choosing.
+    function ForcePasswordReset({ username, onDone, onLogout }) {
+      const [current, setCurrent] = useState('');
+      const [next, setNext]       = useState('');
+      const [confirm, setConfirm] = useState('');
+      const [err, setErr]         = useState('');
+      const [busy, setBusy]       = useState(false);
+
+      const submit = async () => {
+        setErr('');
+        if (!current || !next || !confirm) { setErr('All fields are required'); return; }
+        if (next.length < 6)              { setErr('New password must be at least 6 characters'); return; }
+        if (next !== confirm)             { setErr('New passwords do not match'); return; }
+        if (current === next)             { setErr('New password must be different from your current one'); return; }
+        setBusy(true);
+        try {
+          await api('PUT', '/api/change-password', { currentPassword: current, newPassword: next });
+          onDone();
+        } catch(e) { setErr(e.message); setBusy(false); }
+      };
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md">
+            <div className="text-center mb-8">
+              <div className="inline-flex items-center justify-center w-16 h-16 bg-amber-100 rounded-full mb-4">
+                <Icons.Lock size={30} className="text-amber-600" />
+              </div>
+              <h1 className="text-2xl font-bold text-gray-800">Set Your Password</h1>
+              <p className="text-gray-500 text-sm mt-2">
+                Hi <span className="font-semibold text-indigo-600">{username}</span>! For your security, please set a personal password before continuing.
+              </p>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-5 text-xs text-amber-800">
+              Your current password was set by the admin. Choose something only you know — the admin will not see your new password.
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Current (temporary) password</label>
+                <input type="password" value={current} onChange={e=>setCurrent(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"
+                  placeholder="The password the admin gave you" disabled={busy} autoFocus />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">New password</label>
+                <input type="password" value={next} onChange={e=>setNext(e.target.value)}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"
+                  placeholder="Min 6 characters" disabled={busy} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Confirm new password</label>
+                <input type="password" value={confirm} onChange={e=>setConfirm(e.target.value)}
+                  onKeyDown={e=>e.key==='Enter'&&submit()}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"
+                  placeholder="Repeat new password" disabled={busy} />
+              </div>
+
+              {err && <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-sm text-red-700">{err}</div>}
+
+              <button onClick={submit} disabled={busy}
+                className="w-full bg-indigo-600 text-white py-3 rounded-xl font-medium hover:bg-indigo-700 transition-colors text-sm disabled:opacity-50">
+                {busy ? 'Saving…' : 'Set My Password & Enter App'}
+              </button>
+
+              <button onClick={onLogout} className="w-full text-gray-400 text-xs hover:text-gray-600">
+                Log out instead
+              </button>
+            </div>
           </div>
         </div>
       );
