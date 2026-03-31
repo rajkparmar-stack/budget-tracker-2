@@ -359,6 +359,7 @@
       const [plans, setPlans] = useState([]);
       const [loans, setLoans] = useState([]);
       const [balance, setBal] = useState(0);
+      const [customCats, setCustomCats] = useState([]);
       const [loading, setLoading] = useState(true);
       const [saveErr, setSaveErr] = useState('');
 
@@ -375,6 +376,7 @@
           if (data['future-plans'])        setPlans(data['future-plans']);
           if (data.loans)                  setLoans(data.loans);
           if (data['monthly-balance'] != null) setBal(data['monthly-balance']);
+          if (data['custom-categories'])   setCustomCats(data['custom-categories']);
         } catch(e) { console.error('Load failed:', e.message); }
         setLoading(false);
       };
@@ -416,6 +418,19 @@
       const addLoan = (n,pr,r,py) => { const nl=[...loans,{id:Date.now(),name:n,principal:parseFloat(pr),currentBalance:parseFloat(pr),interestRate:parseFloat(r||0),monthlyPayment:parseFloat(py),startDate:new Date().toISOString()}]; setLoans(nl); save('loans',nl); };
       const remLoan = id => { const x=loans.filter(l=>l.id!==id); setLoans(x); save('loans',x); };
 
+      const DEFAULT_CATS = ['Food','Transport','Entertainment','Shopping','Bills','Loan Payment','Other'];
+      const allCats = [...DEFAULT_CATS, ...customCats.filter(c => !DEFAULT_CATS.includes(c))];
+      const addCustomCat = (name) => {
+        const t = name.trim();
+        if (!t || allCats.includes(t)) return false;
+        const updated = [...customCats, t];
+        setCustomCats(updated); save('custom-categories', updated); return true;
+      };
+      const removeCustomCat = (name) => {
+        const updated = customCats.filter(c => c !== name);
+        setCustomCats(updated); save('custom-categories', updated);
+      };
+
       const totalFixed = fixed.reduce((s,c)=>s+c.amount,0);
       const totalSaved = saves.reduce((s,g)=>s+g.current,0);
       const now        = new Date();
@@ -434,7 +449,7 @@
 
       if (loading) return <Spinner msg="Loading your data…" />;
 
-      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,addLoan,remLoan,updSalary };
+      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,addLoan,remLoan,updSalary,allCats };
 
       return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -471,7 +486,7 @@
 
             <div className="bg-white rounded-2xl shadow-sm p-5 md:p-6">
               {tab==='dashboard' && <Dashboard {...ctx}/>}
-              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend}/>}
+              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat}/>}
               {tab==='savings'   && <SavingsTab   saves={saves}  addSave={addSave}   updSave={updSave}   remSave={remSave}/>}
               {tab==='loans'     && <LoansTab     loans={loans}  addLoan={addLoan}   remLoan={remLoan}/>}
               {tab==='future'    && <FuturePlansTab plans={plans} addPlan={addPlan}   remPlan={remPlan}   salary={salary} totalFixed={totalFixed}/>}
@@ -574,13 +589,21 @@
               {showSpend?<Icons.ChevronUp size={18}/>:<Icons.ChevronDown size={18}/>}
             </button>
             {showSpend&&(
-              <div className="mt-3 space-y-2 max-h-72 overflow-y-auto">
-                {thisSpend.length>0?thisSpend.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(s=>(
-                  <div key={s.id} className="bg-white rounded-lg p-3 flex justify-between items-start text-sm">
-                    <div><p className="font-medium text-gray-800">{s.description}</p><p className="text-xs text-gray-400">{new Date(s.date).toLocaleDateString('en-GB')} · {s.category}</p></div>
-                    <p className="font-bold text-gray-800 ml-4">KES {s.amount.toLocaleString()}</p>
-                  </div>
-                )):<p className="text-sm text-gray-400 text-center py-4">No spending this month</p>}
+              <div className="mt-3 space-y-2">
+                {thisSpend.length>0?(()=>{
+                  // Group by category
+                  const groups = {};
+                  thisSpend.forEach(s=>{
+                    if(!groups[s.category]) groups[s.category]={total:0,items:[]};
+                    groups[s.category].total += s.amount;
+                    groups[s.category].items.push(s);
+                  });
+                  return Object.entries(groups)
+                    .sort((a,b)=>b[1].total-a[1].total)
+                    .map(([cat,{total,items}])=>(
+                    <CategoryGroup key={cat} cat={cat} total={total} items={items}/>
+                  ));
+                })():<p className="text-sm text-gray-400 text-center py-4">No spending this month</p>}
               </div>
             )}
           </div>
@@ -620,6 +643,45 @@
               {saves.length>0?saves.slice(0,3).map(s=>{const pct=(s.current/s.target)*100;return(<div key={s.id} className="mb-3"><div className="flex justify-between text-xs text-gray-500 mb-1"><span>{s.name}</span><span>{Math.round(pct)}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-green-500 h-1.5 rounded-full" style={{width:`${Math.min(pct,100)}%`}}></div></div></div>);}):<p className="text-sm text-gray-400">No goals set</p>}
             </div>
           </div>
+        </div>
+      );
+    }
+
+    // ── Category Group (used in Dashboard spending breakdown) ─────────────
+    function CategoryGroup({ cat, total, items }) {
+      const [open, setOpen] = useState(false);
+      const CAT_COLORS = {
+        'Food':'bg-orange-100 text-orange-700','Transport':'bg-blue-100 text-blue-700',
+        'Entertainment':'bg-purple-100 text-purple-700','Shopping':'bg-pink-100 text-pink-700',
+        'Bills':'bg-red-100 text-red-700','Loan Payment':'bg-indigo-100 text-indigo-700',
+        'Other':'bg-gray-100 text-gray-600',
+      };
+      const pill = CAT_COLORS[cat] || 'bg-teal-100 text-teal-700';
+      return (
+        <div className="bg-white rounded-xl overflow-hidden">
+          <button onClick={()=>setOpen(!open)} className="w-full flex items-center justify-between p-3 hover:bg-gray-50 transition-colors">
+            <div className="flex items-center gap-2">
+              <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${pill}`}>{cat}</span>
+              <span className="text-xs text-gray-400">{items.length} transaction{items.length!==1?'s':''}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-sm text-gray-800">KES {total.toLocaleString()}</span>
+              {open?<Icons.ChevronUp size={14} className="text-gray-400"/>:<Icons.ChevronDown size={14} className="text-gray-400"/>}
+            </div>
+          </button>
+          {open&&(
+            <div className="border-t border-gray-100 max-h-48 overflow-y-auto">
+              {items.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(s=>(
+                <div key={s.id} className="flex justify-between items-center px-3 py-2 border-b border-gray-50 last:border-0 text-sm">
+                  <div>
+                    <p className="text-gray-800">{s.description}</p>
+                    <p className="text-xs text-gray-400">{new Date(s.date).toLocaleDateString('en-GB')}</p>
+                  </div>
+                  <p className="font-medium text-gray-700 ml-4">KES {s.amount.toLocaleString()}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       );
     }
@@ -683,14 +745,23 @@
     }
 
     // ── Spending Tab ──────────────────────────────────────────────────────
-    function SpendingTab({ spend,addSpend,remSpend }) {
+    function SpendingTab({ spend, addSpend, remSpend, allCats, customCats, addCustomCat, removeCustomCat }) {
       const [desc,setDesc]=useState(''); const [amt,setAmt]=useState(''); const [cat,setCat]=useState('Other');
       const [date,setDate]=useState(new Date().toISOString().split('T')[0]);
-      const cats=['Food','Transport','Entertainment','Shopping','Bills','Loan Payment','Other'];
+      const [newCat,setNewCat]=useState(''); const [showCatMgr,setShowCatMgr]=useState(false);
+      const [catErr,setCatErr]=useState('');
       const now=new Date();
       const thisMo=spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
       const total=thisMo.reduce((s,e)=>s+e.amount,0);
       const sub=()=>{if(!desc||!amt)return;addSpend(desc,amt,cat,date);setDesc('');setAmt('');setCat('Other');setDate(new Date().toISOString().split('T')[0]);};
+      const handleAddCat=()=>{
+        setCatErr('');
+        if(!newCat.trim()){setCatErr('Enter a category name');return;}
+        const ok=addCustomCat(newCat);
+        if(ok===false){setCatErr('Category already exists');return;}
+        setNewCat('');
+      };
+      const DEFAULT_CATS = ['Food','Transport','Entertainment','Shopping','Bills','Loan Payment','Other'];
       return (
         <div className="space-y-6">
           <h2 className="text-2xl font-bold text-gray-800">Track Spending</h2>
@@ -699,12 +770,53 @@
             <div><label className="block text-sm font-medium text-gray-700 mb-1">What did you spend on?</label><input type="text" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="e.g., Lunch at Java House" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div><label className="block text-sm font-medium text-gray-700 mb-1">Amount (KES)</label><input type="number" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="0" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
-              <div><label className="block text-sm font-medium text-gray-700 mb-1">Category</label><select value={cat} onChange={e=>setCat(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">{cats.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                <select value={cat} onChange={e=>setCat(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+                  {allCats.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
               <div><label className="block text-sm font-medium text-gray-700 mb-1">Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
             </div>
             {cat==='Loan Payment'&&<div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-700">💡 Include the loan name in the description to auto-reduce its balance.</div>}
             <button onClick={sub} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-medium hover:bg-indigo-700 flex items-center justify-center gap-2 text-sm"><Icons.Plus size={18}/> Add Spending</button>
           </div>
+
+          {/* Custom category manager */}
+          <div className="bg-gray-50 rounded-xl overflow-hidden">
+            <button onClick={()=>setShowCatMgr(!showCatMgr)} className="w-full flex items-center justify-between p-4 hover:bg-gray-100 transition-colors">
+              <span className="font-semibold text-gray-700 text-sm flex items-center gap-2"><Icons.Settings size={16}/> Manage Categories</span>
+              {showCatMgr?<Icons.ChevronUp size={16} className="text-gray-400"/>:<Icons.ChevronDown size={16} className="text-gray-400"/>}
+            </button>
+            {showCatMgr&&(
+              <div className="px-4 pb-4 space-y-3 border-t border-gray-200">
+                <p className="text-xs text-gray-500 pt-3">Add custom categories that will appear in the dropdown above.</p>
+                <div className="flex gap-2">
+                  <input type="text" value={newCat} onChange={e=>setNewCat(e.target.value)}
+                    onKeyDown={e=>e.key==='Enter'&&handleAddCat()}
+                    placeholder="e.g., Medical, Education, Fuel"
+                    className="flex-1 px-3 py-2 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/>
+                  <button onClick={handleAddCat} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-indigo-700 flex items-center gap-1">
+                    <Icons.Plus size={15}/> Add
+                  </button>
+                </div>
+                {catErr&&<p className="text-xs text-red-600">{catErr}</p>}
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {DEFAULT_CATS.map(c=>(
+                    <span key={c} className="text-xs bg-gray-200 text-gray-500 px-3 py-1 rounded-full">{c}</span>
+                  ))}
+                  {customCats.map(c=>(
+                    <span key={c} className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full flex items-center gap-1.5">
+                      {c}
+                      <button onClick={()=>removeCustomCat(c)} className="text-indigo-400 hover:text-red-500 leading-none font-bold">×</button>
+                    </span>
+                  ))}
+                </div>
+                {customCats.length===0&&<p className="text-xs text-gray-400 italic">No custom categories yet.</p>}
+              </div>
+            )}
+          </div>
+
           <div>
             <h3 className="font-semibold text-gray-700 mb-3 text-sm">All Transactions</h3>
             {spend.length>0?spend.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(s=>(
