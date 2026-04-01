@@ -514,16 +514,31 @@
       const [rCosts,setRCosts]=useState([]); const [missed,setMissed]=useState([]); const [editC,setEditC]=useState(null);
       const [done,setDone]=useState(false); const [showSpend,setShowSpend]=useState(false); const [selMo,setSelMo]=useState(0);
 
-      const now=new Date(); const cm=new Date(now.getFullYear(),now.getMonth(),1);
+      const GRACE_DAYS = 3; // show previous month reconciliation for first 3 days of new month
+      const now=new Date();
+      const cm=new Date(now.getFullYear(),now.getMonth(),1);
+
+      // Which month needs reconciling: during grace period = previous month, otherwise = current month
+      const inGrace = now.getDate() <= GRACE_DAYS;
+      const reconOffset = inGrace ? 1 : 0;
+      const reconMonth = new Date(cm); reconMonth.setMonth(reconMonth.getMonth() - reconOffset);
+      const reconMonthName = reconMonth.toLocaleDateString('en-US',{month:'long',year:'numeric'});
+
+      // Viewing month for the summary dropdown
       const vm=new Date(cm); vm.setMonth(vm.getMonth()-selMo);
       const moName=vm.toLocaleDateString('en-US',{month:'short',year:'2-digit'});
 
       const thisSpend=spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===vm.getMonth()&&d.getFullYear()===vm.getFullYear();});
       const thisTotal=thisSpend.reduce((s,e)=>s+e.amount,0);
+
+      // Reconciliation uses the recon month's spending (not the dropdown month)
+      const reconSpend=spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===reconMonth.getMonth()&&d.getFullYear()===reconMonth.getFullYear();});
+      const reconTotal=reconSpend.reduce((s,e)=>s+e.amount,0);
+
       const adjFixed=rCosts.length>0?rCosts.reduce((s,c)=>s+c.amount,0):totalFixed;
       const missTotal=missed.reduce((s,e)=>s+e.amount,0);
       const actual=parseFloat(bank||0)+parseFloat(cash||0)+parseFloat(mpesa||0);
-      const expected=balance+salary-adjFixed-thisTotal-missTotal-totalSaved;
+      const expected=balance+salary-adjFixed-reconTotal-missTotal-totalSaved;
       const diff=actual-expected; const balanced=Math.abs(diff)<0.01;
 
       const moOpts=Array.from({length:6},(_,i)=>{const d=new Date(cm);d.setMonth(d.getMonth()-i);return{v:i,l:d.toLocaleDateString('en-US',{month:'long',year:'numeric'})};});
@@ -561,27 +576,46 @@
             </div>
           </div>
 
-          {selMo===0&&(
-            <div className="bg-gradient-to-br from-green-50 to-emerald-50 border-2 border-green-200 rounded-xl p-5">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-bold text-gray-800 flex items-center gap-2"><Icons.CheckCircle size={20} className="text-green-600"/> Month-End Reconciliation</h3>
-                {!showRecon&&<button onClick={()=>{setRCosts(fixed.map(c=>({...c})));setMissed([]);setShowRecon(true);}} className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700">Start</button>}
+          {/* Reconciliation — always visible, targets the correct month */}
+          <div className={`rounded-xl p-5 border-2 ${inGrace ? 'bg-amber-50 border-amber-300' : 'bg-gradient-to-br from-green-50 to-emerald-50 border-green-200'}`}>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                  <Icons.CheckCircle size={20} className={inGrace?'text-amber-500':'text-green-600'}/>
+                  {reconMonthName} Reconciliation
+                </h3>
+                {inGrace&&<p className="text-xs text-amber-700 mt-0.5 font-medium">⚠ Grace period — closes after day {GRACE_DAYS}</p>}
               </div>
-              {!showRecon
-                ?<p className="text-sm text-gray-600">At month-end, reconcile your actual cash with the app's figures.</p>
-                :<ReconForm rCosts={rCosts} editC={editC} setEditC={setEditC}
-                    onUpdCost={(id,v)=>{setRCosts(prev=>prev.map(c=>c.id===id?{...c,amount:parseFloat(v)||c.amount}:c));setEditC(null);}}
-                    adjFixed={adjFixed} missed={missed}
-                    onAddMissed={(d,a,dt)=>setMissed(prev=>[...prev,{id:Date.now(),description:d,amount:parseFloat(a),date:dt}])}
-                    onRemMissed={id=>setMissed(prev=>prev.filter(e=>e.id!==id))}
-                    bank={bank} setBank={setBank} cash={cash} setCash={setCash} mpesa={mpesa} setMpesa={setMpesa}
-                    actual={actual} expected={expected} diff={diff} balanced={balanced}
-                    onRecon={doRecon} done={done}
-                    onCancel={()=>{setShowRecon(false);setBank('');setCash('');setMpesa('');setRCosts([]);setMissed([]);}}
-                  />
-              }
+              {!showRecon&&(
+                <button onClick={()=>{setRCosts(fixed.map(c=>({...c})));setMissed([]);setShowRecon(true);}}
+                  className={`text-white px-4 py-2 rounded-lg text-sm font-medium ${inGrace?'bg-amber-500 hover:bg-amber-600':'bg-green-600 hover:bg-green-700'}`}>
+                  Start
+                </button>
+              )}
             </div>
-          )}
+            {!showRecon?(
+              <div className="space-y-1.5">
+                <p className="text-sm text-gray-600">
+                  Reconcile your actual cash against the app's figures for <b>{reconMonthName}</b>.
+                  Once reconciled, that amount becomes your opening balance.
+                </p>
+                <p className="text-xs text-gray-400">
+                  If you skip reconciliation, go to <b>Setup → Opening Balance</b> to set it manually.
+                </p>
+              </div>
+            ):(
+              <ReconForm rCosts={rCosts} editC={editC} setEditC={setEditC}
+                  onUpdCost={(id,v)=>{setRCosts(prev=>prev.map(c=>c.id===id?{...c,amount:parseFloat(v)||c.amount}:c));setEditC(null);}}
+                  adjFixed={adjFixed} missed={missed}
+                  onAddMissed={(d,a,dt)=>setMissed(prev=>[...prev,{id:Date.now(),description:d,amount:parseFloat(a),date:dt}])}
+                  onRemMissed={id=>setMissed(prev=>prev.filter(e=>e.id!==id))}
+                  bank={bank} setBank={setBank} cash={cash} setCash={setCash} mpesa={mpesa} setMpesa={setMpesa}
+                  actual={actual} expected={expected} diff={diff} balanced={balanced}
+                  onRecon={doRecon} done={done}
+                  onCancel={()=>{setShowRecon(false);setBank('');setCash('');setMpesa('');setRCosts([]);setMissed([]);}}
+              />
+            )}
+          </div>
 
           <div className="bg-gray-50 rounded-xl p-4">
             <button onClick={()=>setShowSpend(!showSpend)} className="w-full flex items-center justify-between">
