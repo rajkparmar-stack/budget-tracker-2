@@ -360,6 +360,7 @@
       const [loans, setLoans] = useState([]);
       const [balance, setBal] = useState(0);
       const [customCats, setCustomCats] = useState([]);
+      const [addFunds, setAddFunds] = useState([]);
       const [loading, setLoading] = useState(true);
       const [saveErr, setSaveErr] = useState('');
 
@@ -377,6 +378,7 @@
           if (data.loans)                  setLoans(data.loans);
           if (data['monthly-balance'] != null) setBal(data['monthly-balance']);
           if (data['custom-categories'])   setCustomCats(data['custom-categories']);
+          if (data['additional-funds'])     setAddFunds(data['additional-funds']);
         } catch(e) { console.error('Load failed:', e.message); }
         setLoading(false);
       };
@@ -431,11 +433,15 @@
         setCustomCats(updated); save('custom-categories', updated);
       };
 
+      const addFund    = (desc, amount, date) => { const x=[...addFunds,{id:Date.now(),description:desc,amount:parseFloat(amount),date:date||new Date().toISOString()}]; setAddFunds(x); save('additional-funds',x); };
+      const removeFund = id => { const x=addFunds.filter(f=>f.id!==id); setAddFunds(x); save('additional-funds',x); };
+
       const totalFixed = fixed.reduce((s,c)=>s+c.amount,0);
       const totalSaved = saves.reduce((s,g)=>s+g.current,0);
       const now        = new Date();
       const thisMonthSpend = spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).reduce((s,e)=>s+e.amount,0);
-      const freeCash   = balance + salary - totalFixed - thisMonthSpend;
+      const thisMonthAddFunds = addFunds.filter(f=>{const d=new Date(f.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).reduce((s,f)=>s+f.amount,0);
+      const freeCash   = balance + salary + thisMonthAddFunds - totalFixed - thisMonthSpend;
 
       const TABS = [
         {id:'dashboard',label:'Dashboard',    I:Icons.DollarSign},
@@ -449,7 +455,7 @@
 
       if (loading) return <Spinner msg="Loading your data…" />;
 
-      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,addLoan,remLoan,updSalary,allCats };
+      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,addLoan,remLoan,updSalary,allCats,addFunds,thisMonthAddFunds };
 
       return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -490,7 +496,7 @@
               {tab==='savings'   && <SavingsTab   saves={saves}  addSave={addSave}   updSave={updSave}   remSave={remSave}/>}
               {tab==='loans'     && <LoansTab     loans={loans}  addLoan={addLoan}   remLoan={remLoan}/>}
               {tab==='future'    && <FuturePlansTab plans={plans} addPlan={addPlan}   remPlan={remPlan}   salary={salary} totalFixed={totalFixed}/>}
-              {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance}/>}
+              {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance} addFunds={addFunds} addFund={addFund} removeFund={removeFund}/>}
               {tab==='users'     && isAdmin && <UsersTab/>}
             </div>
           </div>
@@ -499,7 +505,7 @@
     }
 
     // ── Metric Card ───────────────────────────────────────────────────────
-    const MC = {green:'bg-green-50 text-green-700 border-green-200',red:'bg-red-50 text-red-700 border-red-200',orange:'bg-orange-50 text-orange-700 border-orange-200',blue:'bg-blue-50 text-blue-700 border-blue-200',purple:'bg-purple-50 text-purple-700 border-purple-200'};
+    const MC = {green:'bg-green-50 text-green-700 border-green-200',red:'bg-red-50 text-red-700 border-red-200',orange:'bg-orange-50 text-orange-700 border-orange-200',blue:'bg-blue-50 text-blue-700 border-blue-200',purple:'bg-purple-50 text-purple-700 border-purple-200',teal:'bg-teal-50 text-teal-700 border-teal-200'};
     const MetricCard = ({title,value,color}) => (
       <div className={`border-2 rounded-xl p-4 ${MC[color]}`}>
         <p className="text-xs font-medium opacity-70 mb-1 uppercase tracking-wide">{title}</p>
@@ -508,7 +514,7 @@
     );
 
     // ── Dashboard ─────────────────────────────────────────────────────────
-    function Dashboard({ salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,balance,updBalance,addSpend }) {
+    function Dashboard({ salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,balance,updBalance,addSpend,addFunds,thisMonthAddFunds }) {
       const [showRecon,setShowRecon]=useState(false);
       const [bank,setBank]=useState(''); const [cash,setCash]=useState(''); const [mpesa,setMpesa]=useState('');
       const [rCosts,setRCosts]=useState([]); const [missed,setMissed]=useState([]); const [editC,setEditC]=useState(null);
@@ -534,11 +540,12 @@
       // Reconciliation uses the recon month's spending (not the dropdown month)
       const reconSpend=spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===reconMonth.getMonth()&&d.getFullYear()===reconMonth.getFullYear();});
       const reconTotal=reconSpend.reduce((s,e)=>s+e.amount,0);
+      const reconAddFunds=addFunds.filter(f=>{const d=new Date(f.date);return d.getMonth()===reconMonth.getMonth()&&d.getFullYear()===reconMonth.getFullYear();}).reduce((s,f)=>s+f.amount,0);
 
       const adjFixed=rCosts.length>0?rCosts.reduce((s,c)=>s+c.amount,0):totalFixed;
       const missTotal=missed.reduce((s,e)=>s+e.amount,0);
       const actual=parseFloat(bank||0)+parseFloat(cash||0)+parseFloat(mpesa||0);
-      const expected=balance+salary-adjFixed-reconTotal-missTotal-totalSaved;
+      const expected=balance+salary+reconAddFunds-adjFixed-reconTotal-missTotal-totalSaved;
       const diff=actual-expected; const balanced=Math.abs(diff)<0.01;
 
       const moOpts=Array.from({length:6},(_,i)=>{const d=new Date(cm);d.setMonth(d.getMonth()-i);return{v:i,l:d.toLocaleDateString('en-US',{month:'long',year:'numeric'})};});
@@ -553,12 +560,13 @@
       return (
         <div className="space-y-6">
           <h2 className="text-2xl font-bold text-gray-800">Financial Overview</h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-            <MetricCard title="Opening Balance" value={balance}    color="purple"/>
-            <MetricCard title="Monthly Salary"  value={salary}     color="green"/>
-            <MetricCard title="Fixed Costs"     value={totalFixed} color="red"/>
-            <MetricCard title="This Month"      value={thisTotal}  color="orange"/>
-            <MetricCard title="Available"       value={freeCash}   color={freeCash>=0?'blue':'red'}/>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <MetricCard title="Opening Balance"   value={balance}          color="purple"/>
+            <MetricCard title="Monthly Salary"    value={salary}           color="green"/>
+            <MetricCard title="Additional Funds"  value={thisMonthAddFunds} color="teal"/>
+            <MetricCard title="Fixed Costs"       value={totalFixed}       color="red"/>
+            <MetricCard title="This Month"        value={thisTotal}        color="orange"/>
+            <MetricCard title="Available"         value={freeCash}         color={freeCash>=0?'blue':'red'}/>
           </div>
 
           <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-200 rounded-xl p-5">
@@ -569,7 +577,7 @@
               </select>
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-              <div><p className="text-gray-500 mb-1">Total Income</p>    <p className="text-lg font-bold text-green-700">KES {(balance+salary).toLocaleString()}</p></div>
+              <div><p className="text-gray-500 mb-1">Total Income</p>    <p className="text-lg font-bold text-green-700">KES {(balance+salary+thisMonthAddFunds).toLocaleString()}</p></div>
               <div><p className="text-gray-500 mb-1">Total Expenses</p>  <p className="text-lg font-bold text-red-700">KES {(totalFixed+thisTotal).toLocaleString()}</p></div>
               <div><p className="text-gray-500 mb-1">Total Saved</p>     <p className="text-lg font-bold text-blue-700">KES {totalSaved.toLocaleString()}</p></div>
               <div><p className="text-gray-500 mb-1">Expected Balance</p><p className="text-lg font-bold text-purple-700">KES {freeCash.toLocaleString()}</p></div>
@@ -953,24 +961,75 @@
     }
 
     // ── Setup Tab ─────────────────────────────────────────────────────────
-    function SetupTab({ salary,updSalary,fixed,addFixed,remFixed,balance,updBalance }) {
+    function SetupTab({ salary,updSalary,fixed,addFixed,remFixed,balance,updBalance,addFunds,addFund,removeFund }) {
       const [ns,setNs]=useState(salary); const [cn,setCn]=useState(''); const [ca,setCa]=useState(''); const [nb,setNb]=useState(balance);
+      const [fd,setFd]=useState(''); const [fa,setFa]=useState(''); const [fdt,setFdt]=useState(new Date().toISOString().split('T')[0]);
       const total=fixed.reduce((s,c)=>s+c.amount,0);
+
+      const now=new Date();
+      const thisMonthFunds=addFunds.filter(f=>{const d=new Date(f.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
+      const thisMonthFundsTotal=thisMonthFunds.reduce((s,f)=>s+f.amount,0);
+
+      const subFund=()=>{
+        if(!fd||!fa) return;
+        addFund(fd,fa,fdt);
+        setFd(''); setFa(''); setFdt(new Date().toISOString().split('T')[0]);
+      };
+
       return (
         <div className="space-y-6">
           <h2 className="text-2xl font-bold text-gray-800">Setup</h2>
+
+          {/* Opening Balance */}
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <h3 className="font-semibold text-gray-700">Opening Balance</h3>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">This month's opening balance (KES)</label><input type="number" value={nb} onChange={e=>setNb(e.target.value)} placeholder="0" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-purple-400"/></div>
             <button onClick={()=>updBalance(parseFloat(nb)||0)} className="w-full bg-purple-600 text-white py-2.5 rounded-xl font-medium hover:bg-purple-700 text-sm">Update Opening Balance</button>
             {balance>0&&<p className="text-sm text-purple-700 bg-purple-50 border border-purple-200 rounded-xl p-3">Current: <span className="font-bold">KES {balance.toLocaleString()}</span></p>}
           </div>
+
+          {/* Monthly Salary */}
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <h3 className="font-semibold text-gray-700">Monthly Salary</h3>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Monthly salary (KES)</label><input type="number" value={ns} onChange={e=>setNs(e.target.value)} placeholder="0" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
             <button onClick={()=>updSalary(parseFloat(ns)||0)} className="w-full bg-indigo-600 text-white py-2.5 rounded-xl font-medium hover:bg-indigo-700 text-sm">Update Salary</button>
             {salary>0&&<p className="text-sm text-green-700 bg-green-50 border border-green-200 rounded-xl p-3">Current: <span className="font-bold">KES {salary.toLocaleString()}</span></p>}
           </div>
+
+          {/* Additional Funds */}
+          <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-gray-700">Additional Funds Received</h3>
+              {thisMonthFundsTotal>0&&<span className="text-xs font-semibold bg-teal-100 text-teal-700 px-2.5 py-1 rounded-full">This month: KES {thisMonthFundsTotal.toLocaleString()}</span>}
+            </div>
+            <p className="text-xs text-gray-500">Log any extra income received this month — side income, reimbursements, bonuses, etc. These are variable and added per entry.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Description</label><input type="text" value={fd} onChange={e=>setFd(e.target.value)} placeholder="e.g., Freelance, Bonus" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-teal-400"/></div>
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Amount (KES)</label><input type="number" value={fa} onChange={e=>setFa(e.target.value)} placeholder="0" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-teal-400"/></div>
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Date Received</label><input type="date" value={fdt} onChange={e=>setFdt(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-teal-400"/></div>
+            </div>
+            <button onClick={subFund} className="w-full bg-teal-600 text-white py-2.5 rounded-xl font-medium hover:bg-teal-700 flex items-center justify-center gap-2 text-sm"><Icons.Plus size={18}/> Add Funds</button>
+
+            {addFunds.length>0&&(
+              <div className="space-y-2 pt-2">
+                <div className="flex justify-between text-xs font-semibold text-gray-500 uppercase tracking-wide pb-1 border-b border-gray-200"><span>All Entries</span><span>Amount</span></div>
+                {addFunds.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(f=>(
+                  <div key={f.id} className="bg-white rounded-xl p-3 flex items-center justify-between">
+                    <div>
+                      <p className="font-medium text-gray-800 text-sm">{f.description}</p>
+                      <p className="text-xs text-gray-400">{new Date(f.date).toLocaleDateString('en-GB')}</p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <p className="font-semibold text-teal-700 text-sm">KES {f.amount.toLocaleString()}</p>
+                      <button onClick={()=>removeFund(f.id)} className="text-red-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg"><Icons.Trash2 size={16}/></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Fixed Costs */}
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <h3 className="font-semibold text-gray-700">Fixed Monthly Costs</h3>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Cost Name</label><input type="text" value={cn} onChange={e=>setCn(e.target.value)} placeholder="e.g., Rent, Internet" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
