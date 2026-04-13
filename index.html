@@ -400,12 +400,24 @@
       const addFixed = (n,a) => { const x=[...fixed,{id:Date.now(),name:n,amount:parseFloat(a)}]; setFixed(x); save('fixed-costs',x); };
       const remFixed = id  => { const x=fixed.filter(c=>c.id!==id); setFixed(x); save('fixed-costs',x); };
 
-      const addSpend = (desc,amt,cat,date) => {
+      const addSpend = (desc, amt, cat, date, savingsGoalId=null) => {
         const ns=[...spend,{id:Date.now(),description:desc,amount:parseFloat(amt),category:cat,date:date||new Date().toISOString()}];
         setSpend(ns); save('spending',ns);
         if (cat==='Loan Payment') {
           const m=loans.find(l=>l.currentBalance>0&&desc.toLowerCase().includes(l.name.toLowerCase()));
           if (m) { const nl=loans.map(l=>l.id===m.id?{...l,currentBalance:Math.max(0,l.currentBalance-parseFloat(amt))}:l); setLoans(nl); save('loans',nl); }
+        }
+        if (cat==='Savings') {
+          let updatedSaves;
+          if (savingsGoalId) {
+            // Allocate to the chosen goal
+            updatedSaves = saves.map(s => s.id===savingsGoalId ? {...s, current: s.current+parseFloat(amt)} : s);
+          } else {
+            // No goals exist — create "General Savings" and put it there
+            const general = {id:Date.now()+1, name:'General Savings', target:0, current:parseFloat(amt)};
+            updatedSaves = [...saves, general];
+          }
+          setSaves(updatedSaves); save('savings', updatedSaves);
         }
       };
       const remSpend = id => { const x=spend.filter(s=>s.id!==id); setSpend(x); save('spending',x); };
@@ -420,7 +432,7 @@
       const addLoan = (n,pr,r,py) => { const nl=[...loans,{id:Date.now(),name:n,principal:parseFloat(pr),currentBalance:parseFloat(pr),interestRate:parseFloat(r||0),monthlyPayment:parseFloat(py),startDate:new Date().toISOString()}]; setLoans(nl); save('loans',nl); };
       const remLoan = id => { const x=loans.filter(l=>l.id!==id); setLoans(x); save('loans',x); };
 
-      const DEFAULT_CATS = ['Food','Transport','Entertainment','Shopping','Bills','Loan Payment','Other'];
+      const DEFAULT_CATS = ['Food','Transport','Entertainment','Shopping','Bills','Savings','Loan Payment','Other'];
       const allCats = [...DEFAULT_CATS, ...customCats.filter(c => !DEFAULT_CATS.includes(c))];
       const addCustomCat = (name) => {
         const t = name.trim();
@@ -492,7 +504,7 @@
 
             <div className="bg-white rounded-2xl shadow-sm p-5 md:p-6">
               {tab==='dashboard' && <Dashboard {...ctx}/>}
-              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat}/>}
+              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat} saves={saves}/>}
               {tab==='savings'   && <SavingsTab   saves={saves}  addSave={addSave}   updSave={updSave}   remSave={remSave}/>}
               {tab==='loans'     && <LoansTab     loans={loans}  addLoan={addLoan}   remLoan={remLoan}/>}
               {tab==='future'    && <FuturePlansTab plans={plans} addPlan={addPlan}   remPlan={remPlan}   salary={salary} totalFixed={totalFixed}/>}
@@ -787,15 +799,31 @@
     }
 
     // ── Spending Tab ──────────────────────────────────────────────────────
-    function SpendingTab({ spend, addSpend, remSpend, allCats, customCats, addCustomCat, removeCustomCat }) {
+    function SpendingTab({ spend, addSpend, remSpend, allCats, customCats, addCustomCat, removeCustomCat, saves }) {
       const [desc,setDesc]=useState(''); const [amt,setAmt]=useState(''); const [cat,setCat]=useState('Other');
       const [date,setDate]=useState(new Date().toISOString().split('T')[0]);
+      const [savingsGoalId,setSavingsGoalId]=useState('');
       const [newCat,setNewCat]=useState(''); const [showCatMgr,setShowCatMgr]=useState(false);
       const [catErr,setCatErr]=useState('');
       const now=new Date();
       const thisMo=spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
       const total=thisMo.reduce((s,e)=>s+e.amount,0);
-      const sub=()=>{if(!desc||!amt)return;addSpend(desc,amt,cat,date);setDesc('');setAmt('');setCat('Other');setDate(new Date().toISOString().split('T')[0]);};
+
+      // When user switches to Savings, default the goal picker to the first goal (if any)
+      const handleCatChange = (val) => {
+        setCat(val);
+        if (val==='Savings' && saves.length>0 && !savingsGoalId) setSavingsGoalId(String(saves[0].id));
+      };
+
+      const sub = () => {
+        if (!desc||!amt) return;
+        // For Savings: pass goal id if one is selected, null otherwise (will create General Savings)
+        const goalId = cat==='Savings' && savingsGoalId ? parseInt(savingsGoalId) : null;
+        addSpend(desc, amt, cat, date, goalId);
+        setDesc(''); setAmt(''); setCat('Other'); setSavingsGoalId('');
+        setDate(new Date().toISOString().split('T')[0]);
+      };
+
       const handleAddCat=()=>{
         setCatErr('');
         if(!newCat.trim()){setCatErr('Enter a category name');return;}
@@ -803,7 +831,7 @@
         if(ok===false){setCatErr('Category already exists');return;}
         setNewCat('');
       };
-      const DEFAULT_CATS = ['Food','Transport','Entertainment','Shopping','Bills','Loan Payment','Other'];
+      const DEFAULT_CATS = ['Food','Transport','Entertainment','Shopping','Bills','Savings','Loan Payment','Other'];
       return (
         <div className="space-y-6">
           <h2 className="text-2xl font-bold text-gray-800">Track Spending</h2>
@@ -814,12 +842,32 @@
               <div><label className="block text-sm font-medium text-gray-700 mb-1">Amount (KES)</label><input type="number" value={amt} onChange={e=>setAmt(e.target.value)} placeholder="0" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                <select value={cat} onChange={e=>setCat(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+                <select value={cat} onChange={e=>handleCatChange(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
                   {allCats.map(c=><option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
               <div><label className="block text-sm font-medium text-gray-700 mb-1">Date</label><input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
             </div>
+
+            {/* Savings goal picker */}
+            {cat==='Savings'&&(
+              <div className="bg-green-50 border border-green-200 rounded-xl p-3 space-y-2">
+                <p className="text-xs font-medium text-green-700">Allocate to savings goal:</p>
+                {saves.length>0?(
+                  <select value={savingsGoalId} onChange={e=>setSavingsGoalId(e.target.value)}
+                    className="w-full px-3 py-2 border border-green-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-green-400 bg-white">
+                    {saves.map(s=>(
+                      <option key={s.id} value={String(s.id)}>
+                        {s.name} — KES {s.current.toLocaleString()} / {s.target>0?'KES '+s.target.toLocaleString():'no target'}
+                      </option>
+                    ))}
+                  </select>
+                ):(
+                  <p className="text-xs text-green-600 italic">No goals set — amount will be added to a "General Savings" goal automatically.</p>
+                )}
+              </div>
+            )}
+
             {cat==='Loan Payment'&&<div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-700">💡 Include the loan name in the description to auto-reduce its balance.</div>}
             <button onClick={sub} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-medium hover:bg-indigo-700 flex items-center justify-center gap-2 text-sm"><Icons.Plus size={18}/> Add Spending</button>
           </div>
