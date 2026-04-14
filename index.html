@@ -400,23 +400,40 @@
       const addFixed = (n,a) => { const x=[...fixed,{id:Date.now(),name:n,amount:parseFloat(a)}]; setFixed(x); save('fixed-costs',x); };
       const remFixed = id  => { const x=fixed.filter(c=>c.id!==id); setFixed(x); save('fixed-costs',x); };
 
+      const today = () => new Date().toISOString().split('T')[0];
+
       const addSpend = (desc, amt, cat, date, savingsGoalId=null, planGoalId=null) => {
         const ns=[...spend,{id:Date.now(),description:desc,amount:parseFloat(amt),category:cat,date:date||new Date().toISOString()}];
         setSpend(ns); save('spending',ns);
         if (cat==='Loan Payment') {
           const m=loans.find(l=>l.currentBalance>0&&desc.toLowerCase().includes(l.name.toLowerCase()));
-          if (m) { const nl=loans.map(l=>l.id===m.id?{...l,currentBalance:Math.max(0,l.currentBalance-parseFloat(amt))}:l); setLoans(nl); save('loans',nl); }
+          if (m) {
+            const nl=loans.map(l=>{
+              if (l.id!==m.id) return l;
+              const newBal=Math.max(0,l.currentBalance-parseFloat(amt));
+              return {...l, currentBalance:newBal, ...(newBal===0 && !l.completedAt ? {completedAt:today()} : {})};
+            });
+            setLoans(nl); save('loans',nl);
+          }
         }
         if (cat==='Future Plan') {
           if (planGoalId) {
-            const x=plans.map(p=>p.id===planGoalId?{...p,current:(p.current||0)+parseFloat(amt)}:p);
+            const x=plans.map(p=>{
+              if (p.id!==planGoalId) return p;
+              const newCur=(p.current||0)+parseFloat(amt);
+              return {...p, current:newCur, ...(newCur>=p.amount && !p.completedAt ? {completedAt:today()} : {})};
+            });
             setPlans(x); save('future-plans',x);
           }
         }
         if (cat==='Savings') {
           let updatedSaves;
           if (savingsGoalId) {
-            updatedSaves = saves.map(s => s.id===savingsGoalId ? {...s, current: s.current+parseFloat(amt)} : s);
+            updatedSaves = saves.map(s=>{
+              if (s.id!==savingsGoalId) return s;
+              const newCur=s.current+parseFloat(amt);
+              return {...s, current:newCur, ...(s.target>0 && newCur>=s.target && !s.completedAt ? {completedAt:today()} : {})};
+            });
           } else {
             const general = {id:Date.now()+1, name:'General Savings', target:0, current:parseFloat(amt)};
             updatedSaves = [...saves, general];
@@ -427,12 +444,26 @@
       const remSpend = id => { const x=spend.filter(s=>s.id!==id); setSpend(x); save('spending',x); };
 
       const addSave = (n,t) => { const x=[...saves,{id:Date.now(),name:n,target:parseFloat(t),current:0}]; setSaves(x); save('savings',x); };
-      const updSave = (id,a) => { const x=saves.map(s=>s.id===id?{...s,current:s.current+parseFloat(a)}:s); setSaves(x); save('savings',x); };
+      const updSave = (id,a) => {
+        const x=saves.map(s=>{
+          if (s.id!==id) return s;
+          const newCur=s.current+parseFloat(a);
+          return {...s, current:newCur, ...(s.target>0 && newCur>=s.target && !s.completedAt ? {completedAt:today()} : {})};
+        });
+        setSaves(x); save('savings',x);
+      };
       const remSave = id => { const x=saves.filter(s=>s.id!==id); setSaves(x); save('savings',x); };
 
       const addPlan = (n,a,m) => { const x=[...plans,{id:Date.now(),name:n,amount:parseFloat(a),monthsAhead:parseInt(m),current:0}]; setPlans(x); save('future-plans',x); };
       const remPlan = id => { const x=plans.filter(p=>p.id!==id); setPlans(x); save('future-plans',x); };
-      const updPlan = (id,a) => { const x=plans.map(p=>p.id===id?{...p,current:(p.current||0)+parseFloat(a)}:p); setPlans(x); save('future-plans',x); };
+      const updPlan = (id,a) => {
+        const x=plans.map(p=>{
+          if (p.id!==id) return p;
+          const newCur=(p.current||0)+parseFloat(a);
+          return {...p, current:newCur, ...(newCur>=p.amount && !p.completedAt ? {completedAt:today()} : {})};
+        });
+        setPlans(x); save('future-plans',x);
+      };
 
       const addLoan = (n,pr,r,py) => { const nl=[...loans,{id:Date.now(),name:n,principal:parseFloat(pr),currentBalance:parseFloat(pr),interestRate:parseFloat(r||0),monthlyPayment:parseFloat(py),startDate:new Date().toISOString()}]; setLoans(nl); save('loans',nl); };
       const remLoan = id => { const x=loans.filter(l=>l.id!==id); setLoans(x); save('loans',x); };
@@ -460,6 +491,17 @@
       const thisMonthAddFunds = addFunds.filter(f=>{const d=new Date(f.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).reduce((s,f)=>s+f.amount,0);
       const freeCash   = balance + salary + thisMonthAddFunds - totalFixed - thisMonthSpend;
 
+      // Hide items completed in a previous month (completedAt set when they hit 100%)
+      const prevMonth = (d) => {
+        if (!d) return false;
+        const c = new Date(d), n = new Date();
+        return c.getFullYear() < n.getFullYear() ||
+          (c.getFullYear() === n.getFullYear() && c.getMonth() < n.getMonth());
+      };
+      const activeSaves = saves.filter(s => !prevMonth(s.completedAt));
+      const activeLoans = loans.filter(l => !prevMonth(l.completedAt));
+      const activePlans = plans.filter(p => !prevMonth(p.completedAt));
+
       const TABS = [
         {id:'dashboard',label:'Dashboard',    I:Icons.DollarSign},
         {id:'spending', label:'Spending',     I:Icons.TrendingDown},
@@ -472,7 +514,7 @@
 
       if (loading) return <Spinner msg="Loading your data…" />;
 
-      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,updPlan,addLoan,remLoan,updSalary,allCats,addFunds,thisMonthAddFunds };
+      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,updPlan,addLoan,remLoan,updSalary,allCats,addFunds,thisMonthAddFunds };
 
       return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -509,10 +551,10 @@
 
             <div className="bg-white rounded-2xl shadow-sm p-5 md:p-6">
               {tab==='dashboard' && <Dashboard {...ctx}/>}
-              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat} saves={saves} plans={plans}/>}
-              {tab==='savings'   && <SavingsTab   saves={saves}  addSave={addSave}   updSave={updSave}   remSave={remSave}/>}
-              {tab==='loans'     && <LoansTab     loans={loans}  addLoan={addLoan}   remLoan={remLoan}/>}
-              {tab==='future'    && <FuturePlansTab plans={plans} addPlan={addPlan}   remPlan={remPlan}   salary={salary} totalFixed={totalFixed}/>}
+              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat} saves={activeSaves} plans={activePlans}/>}
+              {tab==='savings'   && <SavingsTab   saves={activeSaves} addSave={addSave} updSave={updSave} remSave={remSave}/>}
+              {tab==='loans'     && <LoansTab     loans={activeLoans} addLoan={addLoan} remLoan={remLoan}/>}
+              {tab==='future'    && <FuturePlansTab plans={activePlans} addPlan={addPlan} remPlan={remPlan} salary={salary} totalFixed={totalFixed}/>}
               {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance} addFunds={addFunds} addFund={addFund} removeFund={removeFund}/>}
               {tab==='users'     && isAdmin && <UsersTab/>}
             </div>
@@ -531,7 +573,7 @@
     );
 
     // ── Dashboard ─────────────────────────────────────────────────────────
-    function Dashboard({ salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,balance,updBalance,addSpend,addFunds,thisMonthAddFunds }) {
+    function Dashboard({ salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFunds,thisMonthAddFunds }) {
       const [showRecon,setShowRecon]=useState(false);
       const [bank,setBank]=useState(''); const [cash,setCash]=useState(''); const [mpesa,setMpesa]=useState('');
       const [rCosts,setRCosts]=useState([]); const [missed,setMissed]=useState([]); const [editC,setEditC]=useState(null);
@@ -667,10 +709,10 @@
             )}
           </div>
 
-          {loans.length>0&&(
+          {activeLoans.length>0&&(
             <div className="bg-gray-50 rounded-xl p-4">
               <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2 text-sm"><Icons.CreditCard size={18}/> Loan Progress</h3>
-              {loans.map(l=>{const pct=((l.principal-l.currentBalance)/l.principal)*100;return(
+              {activeLoans.map(l=>{const pct=((l.principal-l.currentBalance)/l.principal)*100;return(
                 <div key={l.id} className="bg-white rounded-lg p-3 mb-2">
                   <div className="flex justify-between text-sm mb-2"><p className="font-medium">{l.name}</p><span className="text-indigo-600 font-medium">{Math.round(pct)}%</span></div>
                   <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-indigo-600 h-2 rounded-full" style={{width:`${pct}%`}}></div></div>
@@ -680,10 +722,10 @@
             </div>
           )}
 
-          {plans.length>0&&(
+          {activePlans.length>0&&(
             <div className="bg-gray-50 rounded-xl p-4">
               <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2 text-sm"><Icons.Calendar size={18}/> Upcoming Plans</h3>
-              {plans.sort((a,b)=>a.monthsAhead-b.monthsAhead).slice(0,3).map(p=>{const td=new Date();td.setMonth(td.getMonth()+p.monthsAhead);const saved=p.current||0;return(
+              {activePlans.sort((a,b)=>a.monthsAhead-b.monthsAhead).slice(0,3).map(p=>{const td=new Date();td.setMonth(td.getMonth()+p.monthsAhead);const saved=p.current||0;return(
                 <div key={p.id} className="bg-white rounded-lg p-3 flex justify-between items-center mb-2 text-sm">
                   <div><p className="font-medium">{p.name}</p><p className="text-xs text-gray-400">{td.toLocaleDateString('en-US',{month:'short',year:'numeric'})} · KES {saved.toLocaleString()} of KES {p.amount.toLocaleString()} saved</p></div>
                   <p className="font-bold text-purple-600 ml-4">KES {Math.round(p.amount/p.monthsAhead).toLocaleString()}/mo</p>
@@ -698,8 +740,8 @@
               {fixed.length>0?fixed.slice(0,5).map(c=><div key={c.id} className="flex justify-between text-sm py-1"><span className="text-gray-500">{c.name}</span><span className="font-medium">KES {c.amount.toLocaleString()}</span></div>):<p className="text-sm text-gray-400">None added</p>}
             </div>
             <div className="bg-gray-50 rounded-xl p-4">
-              <h3 className="font-semibold text-gray-700 mb-3 text-sm">Savings Goals ({saves.length})</h3>
-              {saves.length>0?saves.slice(0,3).map(s=>{const pct=(s.current/s.target)*100;return(<div key={s.id} className="mb-3"><div className="flex justify-between text-xs text-gray-500 mb-1"><span>{s.name}</span><span>{Math.round(pct)}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-green-500 h-1.5 rounded-full" style={{width:`${Math.min(pct,100)}%`}}></div></div></div>);}):<p className="text-sm text-gray-400">No goals set</p>}
+              <h3 className="font-semibold text-gray-700 mb-3 text-sm">Savings Goals ({activeSaves.length})</h3>
+              {activeSaves.length>0?activeSaves.slice(0,3).map(s=>{const pct=(s.current/s.target)*100;return(<div key={s.id} className="mb-3"><div className="flex justify-between text-xs text-gray-500 mb-1"><span>{s.name}</span><span>{Math.round(pct)}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-green-500 h-1.5 rounded-full" style={{width:`${Math.min(pct,100)}%`}}></div></div></div>);}):<p className="text-sm text-gray-400">No goals set</p>}
             </div>
           </div>
         </div>
