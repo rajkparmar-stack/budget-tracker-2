@@ -413,12 +413,11 @@
             setPlans(x); save('future-plans',x);
           }
         }
+        if (cat==='Savings') {
           let updatedSaves;
           if (savingsGoalId) {
-            // Allocate to the chosen goal
             updatedSaves = saves.map(s => s.id===savingsGoalId ? {...s, current: s.current+parseFloat(amt)} : s);
           } else {
-            // No goals exist — create "General Savings" and put it there
             const general = {id:Date.now()+1, name:'General Savings', target:0, current:parseFloat(amt)};
             updatedSaves = [...saves, general];
           }
