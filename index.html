@@ -400,14 +400,19 @@
       const addFixed = (n,a) => { const x=[...fixed,{id:Date.now(),name:n,amount:parseFloat(a)}]; setFixed(x); save('fixed-costs',x); };
       const remFixed = id  => { const x=fixed.filter(c=>c.id!==id); setFixed(x); save('fixed-costs',x); };
 
-      const addSpend = (desc, amt, cat, date, savingsGoalId=null) => {
+      const addSpend = (desc, amt, cat, date, savingsGoalId=null, planGoalId=null) => {
         const ns=[...spend,{id:Date.now(),description:desc,amount:parseFloat(amt),category:cat,date:date||new Date().toISOString()}];
         setSpend(ns); save('spending',ns);
         if (cat==='Loan Payment') {
           const m=loans.find(l=>l.currentBalance>0&&desc.toLowerCase().includes(l.name.toLowerCase()));
           if (m) { const nl=loans.map(l=>l.id===m.id?{...l,currentBalance:Math.max(0,l.currentBalance-parseFloat(amt))}:l); setLoans(nl); save('loans',nl); }
         }
-        if (cat==='Savings') {
+        if (cat==='Future Plan') {
+          if (planGoalId) {
+            const x=plans.map(p=>p.id===planGoalId?{...p,current:(p.current||0)+parseFloat(amt)}:p);
+            setPlans(x); save('future-plans',x);
+          }
+        }
           let updatedSaves;
           if (savingsGoalId) {
             // Allocate to the chosen goal
@@ -426,13 +431,14 @@
       const updSave = (id,a) => { const x=saves.map(s=>s.id===id?{...s,current:s.current+parseFloat(a)}:s); setSaves(x); save('savings',x); };
       const remSave = id => { const x=saves.filter(s=>s.id!==id); setSaves(x); save('savings',x); };
 
-      const addPlan = (n,a,m) => { const x=[...plans,{id:Date.now(),name:n,amount:parseFloat(a),monthsAhead:parseInt(m)}]; setPlans(x); save('future-plans',x); };
+      const addPlan = (n,a,m) => { const x=[...plans,{id:Date.now(),name:n,amount:parseFloat(a),monthsAhead:parseInt(m),current:0}]; setPlans(x); save('future-plans',x); };
       const remPlan = id => { const x=plans.filter(p=>p.id!==id); setPlans(x); save('future-plans',x); };
+      const updPlan = (id,a) => { const x=plans.map(p=>p.id===id?{...p,current:(p.current||0)+parseFloat(a)}:p); setPlans(x); save('future-plans',x); };
 
       const addLoan = (n,pr,r,py) => { const nl=[...loans,{id:Date.now(),name:n,principal:parseFloat(pr),currentBalance:parseFloat(pr),interestRate:parseFloat(r||0),monthlyPayment:parseFloat(py),startDate:new Date().toISOString()}]; setLoans(nl); save('loans',nl); };
       const remLoan = id => { const x=loans.filter(l=>l.id!==id); setLoans(x); save('loans',x); };
 
-      const DEFAULT_CATS = ['Food','Transport','Entertainment','Shopping','Bills','Savings','Loan Payment','Other'];
+      const DEFAULT_CATS = ['Food','Transport','Entertainment','Shopping','Bills','Savings','Future Plan','Loan Payment','Other'];
       const allCats = [...DEFAULT_CATS, ...customCats.filter(c => !DEFAULT_CATS.includes(c))];
       const addCustomCat = (name) => {
         const t = name.trim();
@@ -467,7 +473,7 @@
 
       if (loading) return <Spinner msg="Loading your data…" />;
 
-      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,addLoan,remLoan,updSalary,allCats,addFunds,thisMonthAddFunds };
+      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,updPlan,addLoan,remLoan,updSalary,allCats,addFunds,thisMonthAddFunds };
 
       return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -504,7 +510,7 @@
 
             <div className="bg-white rounded-2xl shadow-sm p-5 md:p-6">
               {tab==='dashboard' && <Dashboard {...ctx}/>}
-              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat} saves={saves}/>}
+              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat} saves={saves} plans={plans}/>}
               {tab==='savings'   && <SavingsTab   saves={saves}  addSave={addSave}   updSave={updSave}   remSave={remSave}/>}
               {tab==='loans'     && <LoansTab     loans={loans}  addLoan={addLoan}   remLoan={remLoan}/>}
               {tab==='future'    && <FuturePlansTab plans={plans} addPlan={addPlan}   remPlan={remPlan}   salary={salary} totalFixed={totalFixed}/>}
@@ -678,10 +684,10 @@
           {plans.length>0&&(
             <div className="bg-gray-50 rounded-xl p-4">
               <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2 text-sm"><Icons.Calendar size={18}/> Upcoming Plans</h3>
-              {plans.sort((a,b)=>a.monthsAhead-b.monthsAhead).slice(0,3).map(p=>{const td=new Date();td.setMonth(td.getMonth()+p.monthsAhead);return(
+              {plans.sort((a,b)=>a.monthsAhead-b.monthsAhead).slice(0,3).map(p=>{const td=new Date();td.setMonth(td.getMonth()+p.monthsAhead);const saved=p.current||0;return(
                 <div key={p.id} className="bg-white rounded-lg p-3 flex justify-between items-center mb-2 text-sm">
-                  <div><p className="font-medium">{p.name}</p><p className="text-xs text-gray-400">{td.toLocaleDateString('en-US',{month:'short',year:'numeric'})} · Save KES {Math.round(p.amount/p.monthsAhead).toLocaleString()}/mo</p></div>
-                  <p className="font-bold text-purple-600">KES {p.amount.toLocaleString()}</p>
+                  <div><p className="font-medium">{p.name}</p><p className="text-xs text-gray-400">{td.toLocaleDateString('en-US',{month:'short',year:'numeric'})} · KES {saved.toLocaleString()} of KES {p.amount.toLocaleString()} saved</p></div>
+                  <p className="font-bold text-purple-600 ml-4">KES {Math.round(p.amount/p.monthsAhead).toLocaleString()}/mo</p>
                 </div>
               );})}
             </div>
@@ -799,28 +805,29 @@
     }
 
     // ── Spending Tab ──────────────────────────────────────────────────────
-    function SpendingTab({ spend, addSpend, remSpend, allCats, customCats, addCustomCat, removeCustomCat, saves }) {
+    function SpendingTab({ spend, addSpend, remSpend, allCats, customCats, addCustomCat, removeCustomCat, saves, plans }) {
       const [desc,setDesc]=useState(''); const [amt,setAmt]=useState(''); const [cat,setCat]=useState('Other');
       const [date,setDate]=useState(new Date().toISOString().split('T')[0]);
       const [savingsGoalId,setSavingsGoalId]=useState('');
+      const [planGoalId,setPlanGoalId]=useState('');
       const [newCat,setNewCat]=useState(''); const [showCatMgr,setShowCatMgr]=useState(false);
       const [catErr,setCatErr]=useState('');
       const now=new Date();
       const thisMo=spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
       const total=thisMo.reduce((s,e)=>s+e.amount,0);
 
-      // When user switches to Savings, default the goal picker to the first goal (if any)
       const handleCatChange = (val) => {
         setCat(val);
-        if (val==='Savings' && saves.length>0 && !savingsGoalId) setSavingsGoalId(String(saves[0].id));
+        if (val==='Savings'    && saves.length>0 && !savingsGoalId) setSavingsGoalId(String(saves[0].id));
+        if (val==='Future Plan'&& plans.length>0 && !planGoalId)    setPlanGoalId(String(plans[0].id));
       };
 
       const sub = () => {
         if (!desc||!amt) return;
-        // For Savings: pass goal id if one is selected, null otherwise (will create General Savings)
-        const goalId = cat==='Savings' && savingsGoalId ? parseInt(savingsGoalId) : null;
-        addSpend(desc, amt, cat, date, goalId);
-        setDesc(''); setAmt(''); setCat('Other'); setSavingsGoalId('');
+        const sGoalId = cat==='Savings'     && savingsGoalId ? parseInt(savingsGoalId) : null;
+        const pGoalId = cat==='Future Plan' && planGoalId    ? parseInt(planGoalId)    : null;
+        addSpend(desc, amt, cat, date, sGoalId, pGoalId);
+        setDesc(''); setAmt(''); setCat('Other'); setSavingsGoalId(''); setPlanGoalId('');
         setDate(new Date().toISOString().split('T')[0]);
       };
 
@@ -831,7 +838,7 @@
         if(ok===false){setCatErr('Category already exists');return;}
         setNewCat('');
       };
-      const DEFAULT_CATS = ['Food','Transport','Entertainment','Shopping','Bills','Savings','Loan Payment','Other'];
+      const DEFAULT_CATS = ['Food','Transport','Entertainment','Shopping','Bills','Savings','Future Plan','Loan Payment','Other'];
       return (
         <div className="space-y-6">
           <h2 className="text-2xl font-bold text-gray-800">Track Spending</h2>
@@ -863,7 +870,30 @@
                     ))}
                   </select>
                 ):(
-                  <p className="text-xs text-green-600 italic">No goals set — amount will be added to a "General Savings" goal automatically.</p>
+                  <p className="text-xs text-green-600 italic">No goals set — will be added to "General Savings" automatically.</p>
+                )}
+              </div>
+            )}
+
+            {/* Future plan picker */}
+            {cat==='Future Plan'&&(
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 space-y-2">
+                <p className="text-xs font-medium text-purple-700">Allocate to future plan:</p>
+                {plans.length>0?(
+                  <select value={planGoalId} onChange={e=>setPlanGoalId(e.target.value)}
+                    className="w-full px-3 py-2 border border-purple-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-purple-400 bg-white">
+                    {plans.sort((a,b)=>a.monthsAhead-b.monthsAhead).map(p=>{
+                      const saved=p.current||0;
+                      const pct=p.amount>0?Math.round((saved/p.amount)*100):0;
+                      return(
+                        <option key={p.id} value={String(p.id)}>
+                          {p.name} — KES {saved.toLocaleString()} / KES {p.amount.toLocaleString()} ({pct}%)
+                        </option>
+                      );
+                    })}
+                  </select>
+                ):(
+                  <p className="text-xs text-purple-600 italic">No future plans set. Add one in the Future Plans tab first.</p>
                 )}
               </div>
             )}
@@ -994,14 +1024,25 @@
             </div>
             <button onClick={sub} className="w-full bg-purple-600 text-white py-3 rounded-xl font-medium hover:bg-purple-700 flex items-center justify-center gap-2 text-sm"><Icons.Plus size={18}/> Add Plan</button>
           </div>
-          {plans.length>0?plans.sort((a,b)=>a.monthsAhead-b.monthsAhead).map(p=>{const mpm=p.amount/p.monthsAhead;const td=new Date();td.setMonth(td.getMonth()+p.monthsAhead);return(
+          {plans.length>0?plans.sort((a,b)=>a.monthsAhead-b.monthsAhead).map(p=>{
+            const mpm=p.amount/p.monthsAhead;
+            const saved=p.current||0;
+            const pct=p.amount>0?Math.min((saved/p.amount)*100,100):0;
+            const td=new Date();td.setMonth(td.getMonth()+p.monthsAhead);
+            return(
             <div key={p.id} className="bg-gray-50 rounded-xl p-4">
               <div className="flex items-start justify-between mb-3"><div><h4 className="font-semibold text-gray-800">{p.name}</h4><p className="text-xs text-gray-400">Target: {td.toLocaleDateString('en-US',{month:'long',year:'numeric'})}</p></div><button onClick={()=>remPlan(p.id)} className="text-red-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg"><Icons.Trash2 size={16}/></button></div>
-              <div className="grid grid-cols-2 gap-3 text-sm">
+              <div className="grid grid-cols-3 gap-3 text-sm mb-3">
                 <div className="bg-white rounded-lg p-3"><p className="text-xs text-gray-400 mb-1">Total Needed</p><p className="font-bold text-lg">KES {p.amount.toLocaleString()}</p></div>
+                <div className="bg-white rounded-lg p-3"><p className="text-xs text-gray-400 mb-1">Saved So Far</p><p className="font-bold text-lg text-purple-600">KES {saved.toLocaleString()}</p></div>
                 <div className="bg-white rounded-lg p-3"><p className="text-xs text-gray-400 mb-1">Save Per Month</p><p className="font-bold text-lg">KES {Math.round(mpm).toLocaleString()}</p></div>
               </div>
+              <div>
+                <div className="flex justify-between text-xs text-gray-400 mb-1"><span>Progress</span><span>{Math.round(pct)}%</span></div>
+                <div className="w-full bg-gray-200 rounded-full h-2"><div className="bg-purple-500 h-2 rounded-full transition-all" style={{width:`${pct}%`}}></div></div>
+              </div>
               {mpm>surplus&&<div className="mt-3 bg-yellow-50 border border-yellow-200 rounded-xl p-3 text-xs text-yellow-800">⚠️ Requires more than your monthly surplus. Consider extending the timeline.</div>}
+              {pct>=100&&<div className="mt-3 bg-green-50 border border-green-200 rounded-xl p-3 text-xs text-green-700 font-medium">🎉 Target reached!</div>}
             </div>
           );}):(<p className="text-gray-400 text-center py-10 text-sm">No plans yet</p>)}
         </div>
