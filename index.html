@@ -361,6 +361,7 @@
       const [balance, setBal] = useState(0);
       const [customCats, setCustomCats] = useState([]);
       const [addFunds, setAddFunds] = useState([]);
+      const [rates, setRates] = useState({USD:0, GBP:0});
       const [loading, setLoading] = useState(true);
       const [saveErr, setSaveErr] = useState('');
 
@@ -379,6 +380,7 @@
           if (data['monthly-balance'] != null) setBal(data['monthly-balance']);
           if (data['custom-categories'])   setCustomCats(data['custom-categories']);
           if (data['additional-funds'])     setAddFunds(data['additional-funds']);
+          if (data['exchange-rates'])       setRates(data['exchange-rates']);
         } catch(e) { console.error('Load failed:', e.message); }
         setLoading(false);
       };
@@ -443,7 +445,7 @@
       };
       const remSpend = id => { const x=spend.filter(s=>s.id!==id); setSpend(x); save('spending',x); };
 
-      const addSave = (n,t) => { const x=[...saves,{id:Date.now(),name:n,target:parseFloat(t),current:0}]; setSaves(x); save('savings',x); };
+      const addSave = (n,t,currency='KES') => { const x=[...saves,{id:Date.now(),name:n,target:parseFloat(t),current:0,currency:currency||'KES'}]; setSaves(x); save('savings',x); };
       const updSave = (id,a) => {
         if (id === 'general') {
           // Find existing General Savings or create it
@@ -495,8 +497,23 @@
       const addFund    = (desc, amount, date) => { const x=[...addFunds,{id:Date.now(),description:desc,amount:parseFloat(amount),date:date||new Date().toISOString()}]; setAddFunds(x); save('additional-funds',x); };
       const removeFund = id => { const x=addFunds.filter(f=>f.id!==id); setAddFunds(x); save('additional-funds',x); };
 
+      const updRates = (r) => { setRates(r); save('exchange-rates', r); };
+
+      // Currency helpers
+      const CURR = {KES:{sym:'KES',flag:'🇰🇪'}, USD:{sym:'$',flag:'🇺🇸'}, GBP:{sym:'£',flag:'🇬🇧'}};
+      const toKES = (amount, currency) => {
+        if (!currency || currency==='KES') return amount;
+        const r = rates[currency] || 0;
+        return r > 0 ? amount * r : 0; // 0 if rate not set yet
+      };
+      const fmtCurr = (amount, currency) => {
+        const c = CURR[currency] || CURR.KES;
+        return `${c.sym} ${amount.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2})}`;
+      };
+
       const totalFixed = fixed.reduce((s,c)=>s+c.amount,0);
-      const totalSaved = saves.reduce((s,g)=>s+g.current,0);
+      // totalSaved converts each goal to KES for dashboard display
+      const totalSaved = saves.reduce((s,g)=>s+toKES(g.current, g.currency),0);
       const now        = new Date();
       const thisMonthSpend = spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).reduce((s,e)=>s+e.amount,0);
       const thisMonthAddFunds = addFunds.filter(f=>{const d=new Date(f.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).reduce((s,f)=>s+f.amount,0);
@@ -525,7 +542,7 @@
 
       if (loading) return <Spinner msg="Loading your data…" />;
 
-      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,updPlan,addLoan,remLoan,updSalary,allCats,addFunds,thisMonthAddFunds };
+      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,updPlan,addLoan,remLoan,updSalary,allCats,addFunds,thisMonthAddFunds,rates,updRates,toKES,fmtCurr,CURR };
 
       return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -563,10 +580,10 @@
             <div className="bg-white rounded-2xl shadow-sm p-5 md:p-6">
               {tab==='dashboard' && <Dashboard {...ctx}/>}
               {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat} saves={activeSaves} plans={activePlans}/>}
-              {tab==='savings'   && <SavingsTab   saves={activeSaves} addSave={addSave} updSave={updSave} remSave={remSave}/>}
+              {tab==='savings'   && <SavingsTab   saves={activeSaves} addSave={addSave} updSave={updSave} remSave={remSave} rates={rates} toKES={toKES} fmtCurr={fmtCurr} CURR={CURR}/>}
               {tab==='loans'     && <LoansTab     loans={activeLoans} addLoan={addLoan} remLoan={remLoan}/>}
               {tab==='future'    && <FuturePlansTab plans={activePlans} addPlan={addPlan} remPlan={remPlan} salary={salary} totalFixed={totalFixed}/>}
-              {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance} addFunds={addFunds} addFund={addFund} removeFund={removeFund} activeSaves={activeSaves} updSave={updSave}/>}
+              {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance} addFunds={addFunds} addFund={addFund} removeFund={removeFund} activeSaves={activeSaves} updSave={updSave} rates={rates} updRates={updRates}/>}
               {tab==='users'     && isAdmin && <UsersTab/>}
             </div>
           </div>
@@ -1002,23 +1019,98 @@
     }
 
     // ── Savings Tab ───────────────────────────────────────────────────────
-    function SavingsTab({ saves,addSave,updSave,remSave }) {
-      const [name,setName]=useState(''); const [target,setTarget]=useState(''); const [aa,setAA]=useState({});
+    // ── Savings Tab ───────────────────────────────────────────────────────
+    function SavingsTab({ saves, addSave, updSave, remSave, rates, toKES, fmtCurr, CURR }) {
+      const [name,setName]=useState(''); const [target,setTarget]=useState('');
+      const [currency,setCurrency]=useState('KES');
+      const [aa,setAA]=useState({});
+
+      const missingRate = (cur) => cur!=='KES' && (!rates[cur] || rates[cur]<=0);
+
       return (
         <div className="space-y-6">
           <h2 className="text-2xl font-bold text-gray-800">Savings Goals</h2>
-          <div className="bg-gray-50 rounded-xl p-4 space-y-3">
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Goal Name</label><input type="text" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g., Emergency Fund" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-green-400"/></div>
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Target (KES)</label><input type="number" value={target} onChange={e=>setTarget(e.target.value)} placeholder="0" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-green-400"/></div>
-            <button onClick={()=>{if(name&&target){addSave(name,target);setName('');setTarget('');}}} className="w-full bg-green-600 text-white py-3 rounded-xl font-medium hover:bg-green-700 flex items-center justify-center gap-2 text-sm"><Icons.Plus size={18}/> Create Goal</button>
-          </div>
-          {saves.length>0?saves.map(s=>{const pct=(s.current/s.target)*100;return(
-            <div key={s.id} className="bg-gray-50 rounded-xl p-4 space-y-3">
-              <div className="flex items-start justify-between"><div><h4 className="font-semibold text-gray-800">{s.name}</h4><p className="text-sm text-gray-400">KES {s.current.toLocaleString()} of KES {s.target.toLocaleString()}</p></div><button onClick={()=>remSave(s.id)} className="text-red-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg"><Icons.Trash2 size={16}/></button></div>
-              <div><div className="flex justify-between text-xs text-gray-400 mb-1"><span>Progress</span><span>{Math.round(pct)}%</span></div><div className="w-full bg-gray-200 rounded-full h-2.5"><div className="bg-green-500 h-2.5 rounded-full" style={{width:`${Math.min(pct,100)}%`}}></div></div></div>
-              <div className="flex gap-2"><input type="number" value={aa[s.id]||''} onChange={e=>setAA({...aa,[s.id]:e.target.value})} placeholder="Add amount…" className="flex-1 px-3 py-2 border border-gray-300 rounded-xl text-sm outline-none"/><button onClick={()=>{if(aa[s.id]){updSave(s.id,aa[s.id]);setAA({...aa,[s.id]:''});}}} className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-indigo-700">Add</button></div>
+
+          {/* Rate warning */}
+          {(missingRate('USD')||missingRate('GBP'))&&(
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
+              ⚠ Set your USD and GBP exchange rates in <b>Setup → Exchange Rates</b> to see KES equivalents.
             </div>
-          );}):(<p className="text-gray-400 text-center py-10 text-sm">No savings goals yet</p>)}
+          )}
+
+          {/* Create goal */}
+          <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+            <div><label className="block text-sm font-medium text-gray-700 mb-1">Goal Name</label>
+              <input type="text" value={name} onChange={e=>setName(e.target.value)} placeholder="e.g., Emergency Fund, US Vacation"
+                className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-green-400"/>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Currency</label>
+                <select value={currency} onChange={e=>setCurrency(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-green-400 bg-white">
+                  <option value="KES">🇰🇪 KES — Kenyan Shilling</option>
+                  <option value="USD">🇺🇸 USD — US Dollar</option>
+                  <option value="GBP">🇬🇧 GBP — British Pound</option>
+                </select>
+              </div>
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Target ({CURR[currency]?.sym})</label>
+                <input type="number" value={target} onChange={e=>setTarget(e.target.value)} placeholder="0"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-green-400"/>
+              </div>
+            </div>
+            {missingRate(currency)&&<p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">⚠ No {currency} rate set yet — KES equivalent won't show. Go to Setup → Exchange Rates.</p>}
+            <button onClick={()=>{if(name&&target){addSave(name,target,currency);setName('');setTarget('');setCurrency('KES');}}}
+              className="w-full bg-green-600 text-white py-3 rounded-xl font-medium hover:bg-green-700 flex items-center justify-center gap-2 text-sm">
+              <Icons.Plus size={18}/> Create Goal
+            </button>
+          </div>
+
+          {/* Goals list */}
+          {saves.length>0?saves.map(s=>{
+            const cur = s.currency||'KES';
+            const sym = CURR[cur]?.sym||'KES';
+            const pct = s.target>0 ? Math.min((s.current/s.target)*100,100) : 0;
+            const kesEquiv = toKES(s.current,cur);
+            const kesTarget = toKES(s.target,cur);
+            const showKES = cur!=='KES' && rates[cur]>0;
+            return(
+              <div key={s.id} className="bg-gray-50 rounded-xl p-4 space-y-3">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-semibold text-gray-800">{s.name}</h4>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${cur==='KES'?'bg-gray-200 text-gray-600':cur==='USD'?'bg-blue-100 text-blue-700':'bg-purple-100 text-purple-700'}`}>
+                        {CURR[cur]?.flag} {cur}
+                      </span>
+                    </div>
+                    <p className="text-sm text-gray-400 mt-0.5">
+                      {fmtCurr(s.current,cur)} of {fmtCurr(s.target,cur)}
+                      {showKES&&<span className="text-xs text-gray-300 ml-1">≈ KES {kesEquiv.toLocaleString(undefined,{maximumFractionDigits:0})} / KES {kesTarget.toLocaleString(undefined,{maximumFractionDigits:0})}</span>}
+                    </p>
+                  </div>
+                  <button onClick={()=>remSave(s.id)} className="text-red-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg"><Icons.Trash2 size={16}/></button>
+                </div>
+                <div>
+                  <div className="flex justify-between text-xs text-gray-400 mb-1"><span>Progress</span><span>{Math.round(pct)}%</span></div>
+                  <div className="w-full bg-gray-200 rounded-full h-2.5">
+                    <div className={`h-2.5 rounded-full ${cur==='USD'?'bg-blue-500':cur==='GBP'?'bg-purple-500':'bg-green-500'}`} style={{width:`${pct}%`}}></div>
+                  </div>
+                </div>
+                {s.target>0&&pct>=100&&<div className="bg-green-50 border border-green-200 rounded-xl p-2 text-xs text-green-700 font-medium text-center">🎉 Goal reached!</div>}
+                <div className="flex gap-2">
+                  <div className="relative flex-1">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">{sym}</span>
+                    <input type="number" value={aa[s.id]||''} onChange={e=>setAA({...aa,[s.id]:e.target.value})}
+                      placeholder={`Add in ${cur}…`}
+                      className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-green-400"/>
+                  </div>
+                  <button onClick={()=>{if(aa[s.id]){updSave(s.id,aa[s.id]);setAA({...aa,[s.id]:''});}}}
+                    className="bg-indigo-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-indigo-700">Add</button>
+                </div>
+                {showKES&&aa[s.id]&&<p className="text-xs text-gray-400 text-right">≈ KES {(parseFloat(aa[s.id]||0)*rates[cur]).toLocaleString(undefined,{maximumFractionDigits:0})}</p>}
+              </div>
+            );
+          }):(<p className="text-gray-400 text-center py-10 text-sm">No savings goals yet</p>)}
         </div>
       );
     }
@@ -1101,10 +1193,12 @@
     }
 
     // ── Setup Tab ─────────────────────────────────────────────────────────
-    function SetupTab({ salary,updSalary,fixed,addFixed,remFixed,balance,updBalance,addFunds,addFund,removeFund,activeSaves,updSave }) {
+    function SetupTab({ salary,updSalary,fixed,addFixed,remFixed,balance,updBalance,addFunds,addFund,removeFund,activeSaves,updSave,rates,updRates }) {
       const [ns,setNs]=useState(salary); const [cn,setCn]=useState(''); const [ca,setCa]=useState(''); const [nb,setNb]=useState(balance);
       const [fd,setFd]=useState(''); const [fa,setFa]=useState(''); const [fdt,setFdt]=useState(new Date().toISOString().split('T')[0]);
       const [selSaveId,setSelSaveId]=useState(''); const [saveAmt,setSaveAmt]=useState(''); const [saveOk,setSaveOk]=useState('');
+      const [usdRate,setUsdRate]=useState(rates.USD||''); const [gbpRate,setGbpRate]=useState(rates.GBP||'');
+      const [rateOk,setRateOk]=useState(false);
       const total=fixed.reduce((s,c)=>s+c.amount,0);
 
       const now=new Date();
@@ -1230,11 +1324,38 @@
               </div>
             )}
           </div>
+
+          {/* Exchange Rates */}
+          <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+            <div>
+              <h3 className="font-semibold text-gray-700">Exchange Rates</h3>
+              <p className="text-xs text-gray-400 mt-0.5">Used to convert USD and GBP savings goals into KES for display. Update whenever rates change.</p>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">🇺🇸 1 USD = KES</label>
+                <input type="number" value={usdRate} onChange={e=>setUsdRate(e.target.value)} placeholder="e.g. 130"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-blue-400"/>
+                {rates.USD>0&&<p className="text-xs text-gray-400 mt-1">Current: 1 USD = KES {rates.USD}</p>}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">🇬🇧 1 GBP = KES</label>
+                <input type="number" value={gbpRate} onChange={e=>setGbpRate(e.target.value)} placeholder="e.g. 165"
+                  className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-purple-400"/>
+                {rates.GBP>0&&<p className="text-xs text-gray-400 mt-1">Current: 1 GBP = KES {rates.GBP}</p>}
+              </div>
+            </div>
+            <button onClick={()=>{
+              const r={USD:parseFloat(usdRate)||0, GBP:parseFloat(gbpRate)||0};
+              updRates(r); setRateOk(true); setTimeout(()=>setRateOk(false),3000);
+            }} className="w-full bg-blue-600 text-white py-2.5 rounded-xl font-medium hover:bg-blue-700 text-sm">
+              Save Exchange Rates
+            </button>
+            {rateOk&&<p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-xl p-3 font-medium">✓ Exchange rates updated</p>}
+          </div>
         </div>
       );
     }
-
-    // ── Users Tab (admin only) ────────────────────────────────────────────
     function UsersTab() {
       const [users, setUsers] = useState([]);
       const [newUn, setNewUn] = useState(''); const [newPw, setNewPw] = useState('');
