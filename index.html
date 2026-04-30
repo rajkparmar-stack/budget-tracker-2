@@ -1078,9 +1078,13 @@
     function SavingsTab({ saves, addSave, updSave, remSave, updSaveCurrency, rates, toKES, fmtCurr, CURR }) {
       const [name,setName]=useState(''); const [target,setTarget]=useState('');
       const [currency,setCurrency]=useState('KES');
+      const [filterCur,setFilterCur]=useState('ALL');
       const [aa,setAA]=useState({});
 
       const missingRate = (cur) => cur!=='KES' && (!rates[cur] || rates[cur]<=0);
+      const currencies = ['ALL','KES','USD','GBP'];
+      const curLabel = {ALL:'All currencies',KES:'🇰🇪 KES',USD:'🇺🇸 USD',GBP:'🇬🇧 GBP'};
+      const filteredSaves = filterCur==='ALL' ? saves : saves.filter(s=>(s.currency||'KES')===filterCur);
 
       return (
         <div className="space-y-6">
@@ -1090,6 +1094,24 @@
           {(missingRate('USD')||missingRate('GBP'))&&(
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-800">
               ⚠ Set your USD and GBP exchange rates in <b>Setup → Exchange Rates</b> to see KES equivalents.
+            </div>
+          )}
+
+          {/* Currency filter */}
+          {saves.length>0&&(
+            <div className="flex gap-2 flex-wrap">
+              {currencies.map(c=>(
+                <button key={c} onClick={()=>setFilterCur(c)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                    filterCur===c
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}>
+                  {curLabel[c]}
+                  {c!=='ALL'&&<span className="ml-1 opacity-70">({saves.filter(s=>(s.currency||'KES')===c).length})</span>}
+                  {c==='ALL'&&<span className="ml-1 opacity-70">({saves.length})</span>}
+                </button>
+              ))}
             </div>
           )}
 
@@ -1121,7 +1143,7 @@
           </div>
 
           {/* Goals list */}
-          {saves.length>0?saves.map(s=>{
+          {saves.length>0?(filteredSaves.length>0?filteredSaves.map(s=>{
             const cur = s.currency||'KES';
             const sym = CURR[cur]?.sym||'KES';
             const pct = s.target>0 ? Math.min((s.current/s.target)*100,100) : 0;
@@ -1169,7 +1191,7 @@
                 {showKES&&aa[s.id]&&<p className="text-xs text-gray-400 text-right">≈ KES {(parseFloat(aa[s.id]||0)*rates[cur]).toLocaleString(undefined,{maximumFractionDigits:0})}</p>}
               </div>
             );
-          }):(<p className="text-gray-400 text-center py-10 text-sm">No savings goals yet</p>)}
+          }):(<p className="text-gray-400 text-center py-6 text-sm">No {filterCur} goals yet.</p>)):(<p className="text-gray-400 text-center py-10 text-sm">No savings goals yet</p>)}
         </div>
       );
     }
