@@ -364,7 +364,6 @@
       const [customCats, setCustomCats] = useState([]);
       const [addFunds, setAddFunds] = useState([]);
       const [rates, setRates] = useState({USD:0, GBP:0});
-      const [budgetLimits, setBudgetLimits] = useState({});
       const [loading, setLoading] = useState(true);
       const [saveErr, setSaveErr] = useState('');
 
@@ -384,7 +383,6 @@
           if (data['custom-categories'])   setCustomCats(data['custom-categories']);
           if (data['additional-funds'])     setAddFunds(data['additional-funds']);
           if (data['exchange-rates'])       setRates(data['exchange-rates']);
-          if (data['budget-limits'])        setBudgetLimits(data['budget-limits']);
           postDueRecurring(data['fixed-costs'], data['spending']);
         } catch(e) { console.error('Load failed:', e.message); }
         setLoading(false);
@@ -542,16 +540,12 @@
       const addLoan = (n,pr,r,py) => { const nl=[...loans,{id:Date.now(),name:n,principal:parseFloat(pr),currentBalance:parseFloat(pr),interestRate:parseFloat(r||0),monthlyPayment:parseFloat(py),startDate:new Date().toISOString()}]; setLoans(nl); save('loans',nl); };
       const remLoan = id => { const x=loans.filter(l=>l.id!==id); setLoans(x); save('loans',x); };
 
-      const setBudgetLimit = (cat, amount) => {
-        const x = {...budgetLimits};
-        if (!amount || parseFloat(amount)<=0) delete x[cat]; else x[cat]=parseFloat(amount);
-        setBudgetLimits(x); save('budget-limits', x);
-      };
+
 
       const exportData = (fmt) => {
         const now = new Date().toISOString().split('T')[0];
         if (fmt==='json') {
-          const blob = { exportedAt:new Date().toISOString(), user, salary, balance, fixed, spend, saves, plans, loans, addFunds, budgetLimits, customCats, rates };
+          const blob = { exportedAt:new Date().toISOString(), user, salary, balance, fixed, spend, saves, plans, loans, addFunds, customCats, rates };
           const url = URL.createObjectURL(new Blob([JSON.stringify(blob,null,2)], {type:'application/json'}));
           const a=document.createElement('a'); a.href=url; a.download=`budget-backup-${now}.json`; a.click(); URL.revokeObjectURL(url);
         } else {
@@ -594,13 +588,14 @@
         return `${c.sym} ${amount.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2})}`;
       };
 
-      // Only block-deduction costs count toward totalFixed; recurring ones post as
-      // dated transactions and are captured in thisMonthSpend instead (no double-count).
-      const totalFixed = fixed.filter(c=>!c.recurDay).reduce((s,c)=>s+c.amount,0);
+      // All fixed costs count toward totalFixed (shown on the dashboard). Recurring
+      // ones also post a dated transaction for Analytics visibility, but those are
+      // excluded from every spending total below so they're never double-counted.
+      const totalFixed = fixed.reduce((s,c)=>s+c.amount,0);
       // totalSaved converts each goal to KES for dashboard display
       const totalSaved = saves.reduce((s,g)=>s+toKES(g.current, g.currency),0);
       const now        = new Date();
-      const thisMonthSpend = spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).reduce((s,e)=>s+e.amount,0);
+      const thisMonthSpend = spend.filter(s=>{const d=new Date(s.date);return !s.fixedId&&d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).reduce((s,e)=>s+e.amount,0);
       const thisMonthAddFunds = addFunds.filter(f=>{const d=new Date(f.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();}).reduce((s,f)=>s+f.amount,0);
       const freeCash   = balance + salary + thisMonthAddFunds - totalFixed - thisMonthSpend;
 
@@ -615,11 +610,6 @@
       const activeLoans = loans.filter(l => !prevMonth(l.completedAt));
       const activePlans = plans.filter(p => !prevMonth(p.completedAt));
 
-      // This-month spend per category (for budget-limit warnings)
-      const monthCatSpend = {};
-      spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();})
-        .forEach(s=>{ monthCatSpend[s.category]=(monthCatSpend[s.category]||0)+s.amount; });
-
       const TABS = [
         {id:'dashboard',label:'Dashboard',    I:Icons.DollarSign},
         {id:'spending', label:'Spending',     I:Icons.TrendingDown},
@@ -633,7 +623,7 @@
 
       if (loading) return <Spinner msg="Loading your data…" />;
 
-      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,updPlan,addLoan,remLoan,updSalary,allCats,addFunds,thisMonthAddFunds,rates,updRates,toKES,fmtCurr,CURR,budgetLimits,monthCatSpend };
+      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,updPlan,addLoan,remLoan,updSalary,allCats,addFunds,thisMonthAddFunds,rates,updRates,toKES,fmtCurr,CURR };
 
       return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -670,12 +660,12 @@
 
             <div className="bg-white rounded-2xl shadow-sm p-5 md:p-6">
               {tab==='dashboard' && <Dashboard {...ctx}/>}
-              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} updSpendItem={updSpendItem} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat} saves={activeSaves} plans={activePlans} rates={rates} toKES={toKES} fmtCurr={fmtCurr} CURR={CURR} budgetLimits={budgetLimits} monthCatSpend={monthCatSpend}/>}
+              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} updSpendItem={updSpendItem} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat} saves={activeSaves} plans={activePlans} rates={rates} toKES={toKES} fmtCurr={fmtCurr} CURR={CURR}/>}
               {tab==='savings'   && <SavingsTab   saves={activeSaves} addSave={addSave} updSave={updSave} remSave={remSave} updSaveCurrency={updSaveCurrency} rates={rates} toKES={toKES} fmtCurr={fmtCurr} CURR={CURR}/>}
               {tab==='loans'     && <LoansTab     loans={activeLoans} addLoan={addLoan} remLoan={remLoan}/>}
               {tab==='future'    && <FuturePlansTab plans={activePlans} addPlan={addPlan} remPlan={remPlan} salary={salary} totalFixed={totalFixed}/>}
               {tab==='analytics' && <AnalyticsTab spend={spend} addFunds={addFunds} salary={salary} totalFixed={totalFixed}/>}
-              {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance} addFunds={addFunds} addFund={addFund} removeFund={removeFund} activeSaves={activeSaves} updSave={updSave} rates={rates} updRates={updRates} allCats={allCats} budgetLimits={budgetLimits} setBudgetLimit={setBudgetLimit} exportData={exportData}/>}
+              {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance} addFunds={addFunds} addFund={addFund} removeFund={removeFund} activeSaves={activeSaves} updSave={updSave} rates={rates} updRates={updRates} allCats={allCats} exportData={exportData}/>}
               {tab==='users'     && isAdmin && <UsersTab/>}
             </div>
           </div>
@@ -693,7 +683,7 @@
     );
 
     // ── Dashboard ─────────────────────────────────────────────────────────
-    function Dashboard({ salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFunds,thisMonthAddFunds,allCats,budgetLimits,monthCatSpend }) {
+    function Dashboard({ salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFunds,thisMonthAddFunds,allCats }) {
       const [qDesc,setQDesc]=useState(''); const [qAmt,setQAmt]=useState(''); const [qCat,setQCat]=useState('Food'); const [qMsg,setQMsg]=useState('');
       const quickAdd=()=>{
         if(!qDesc||!qAmt)return;
@@ -721,11 +711,11 @@
       const vm=new Date(cm); vm.setMonth(vm.getMonth()-selMo);
       const moName=vm.toLocaleDateString('en-US',{month:'short',year:'2-digit'});
 
-      const thisSpend=spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===vm.getMonth()&&d.getFullYear()===vm.getFullYear();});
+      const thisSpend=spend.filter(s=>{const d=new Date(s.date);return !s.fixedId&&d.getMonth()===vm.getMonth()&&d.getFullYear()===vm.getFullYear();});
       const thisTotal=thisSpend.reduce((s,e)=>s+e.amount,0);
 
       // Reconciliation uses the recon month's spending (not the dropdown month)
-      const reconSpend=spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===reconMonth.getMonth()&&d.getFullYear()===reconMonth.getFullYear();});
+      const reconSpend=spend.filter(s=>{const d=new Date(s.date);return !s.fixedId&&d.getMonth()===reconMonth.getMonth()&&d.getFullYear()===reconMonth.getFullYear();});
       const reconTotal=reconSpend.reduce((s,e)=>s+e.amount,0);
       const reconAddFunds=addFunds.filter(f=>{const d=new Date(f.date);return d.getMonth()===reconMonth.getMonth()&&d.getFullYear()===reconMonth.getFullYear();}).reduce((s,f)=>s+f.amount,0);
 
@@ -799,7 +789,7 @@
                 {inGrace&&<p className="text-xs text-amber-700 mt-0.5 font-medium">⚠ Grace period — closes after day {GRACE_DAYS}</p>}
               </div>
               {!showRecon&&(
-                <button onClick={()=>{setRCosts(fixed.filter(c=>!c.recurDay).map(c=>({...c})));setMissed([]);setShowRecon(true);}}
+                <button onClick={()=>{setRCosts(fixed.map(c=>({...c})));setMissed([]);setShowRecon(true);}}
                   className={`text-white px-4 py-2 rounded-lg text-sm font-medium ${inGrace?'bg-amber-500 hover:bg-amber-600':'bg-green-600 hover:bg-green-700'}`}>
                   Start
                 </button>
@@ -993,7 +983,7 @@
     }
 
     // ── Spending Tab ──────────────────────────────────────────────────────
-    function SpendingTab({ spend, addSpend, remSpend, updSpendItem, allCats, customCats, addCustomCat, removeCustomCat, saves, plans, rates, toKES, fmtCurr, CURR, budgetLimits, monthCatSpend }) {
+    function SpendingTab({ spend, addSpend, remSpend, updSpendItem, allCats, customCats, addCustomCat, removeCustomCat, saves, plans, rates, toKES, fmtCurr, CURR }) {
       const [desc,setDesc]=useState(''); const [amt,setAmt]=useState(''); const [cat,setCat]=useState('Other');
       const [date,setDate]=useState(new Date().toISOString().split('T')[0]);
       const [savingsGoalId,setSavingsGoalId]=useState('');
@@ -1053,18 +1043,6 @@
 
       const currLabel = CURR[spendCurrency]?.sym || spendCurrency;
 
-      // Budget-limit status for the currently selected category
-      const catLimit = (budgetLimits||{})[cat];
-      const catSpent = (monthCatSpend||{})[cat]||0;
-      const projectedCatSpend = catSpent + (parseFloat(amt||0)||0);
-      const catPct = catLimit ? (projectedCatSpend/catLimit)*100 : 0;
-
-      // Over/near-limit categories for the summary banner
-      const limitAlerts = Object.entries(budgetLimits||{}).map(([c,lim])=>{
-        const sp=(monthCatSpend||{})[c]||0; const pct=(sp/lim)*100;
-        return {c,lim,sp,pct};
-      }).filter(a=>a.pct>=80).sort((a,b)=>b.pct-a.pct);
-
       const startEdit=(s)=>{ setEditId(s.id); setEDesc(s.description); setEAmt(s.amount); setECat(s.category); setEDate(new Date(s.date).toISOString().split('T')[0]); };
       const saveEdit=(s)=>{
         updSpendItem(s.id, { description:eDesc, amount:parseFloat(eAmt), category:eCat, date:new Date(eDate).toISOString(), currency:'KES' });
@@ -1081,16 +1059,6 @@
           <h2 className="text-2xl font-bold text-gray-800">Track Spending</h2>
           <div className="bg-indigo-50 border-2 border-indigo-200 rounded-xl p-4"><p className="text-sm text-indigo-600 font-medium">This Month</p><p className="text-3xl font-bold text-indigo-900">KES {total.toLocaleString()}</p><p className="text-xs text-indigo-400 mt-1">{thisMo.length} transactions</p></div>
 
-          {limitAlerts.length>0 && (
-            <div className="space-y-2">
-              {limitAlerts.map(a=>(
-                <div key={a.c} className={`rounded-xl px-4 py-2.5 text-sm flex items-center justify-between border-2 ${a.pct>=100?'bg-red-50 border-red-200 text-red-700':'bg-amber-50 border-amber-200 text-amber-700'}`}>
-                  <span className="font-medium flex items-center gap-2"><Icons.AlertCircle size={15}/> {a.c}: KES {Math.round(a.sp).toLocaleString()} of {a.lim.toLocaleString()}</span>
-                  <span className="font-bold">{a.pct.toFixed(0)}%{a.pct>=100?' — over budget':''}</span>
-                </div>
-              ))}
-            </div>
-          )}
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <div><label className="block text-sm font-medium text-gray-700 mb-1">What did you spend on?</label><input type="text" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="e.g., Lunch at Java House" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -1148,13 +1116,6 @@
             )}
 
             {cat==='Loan Payment'&&<div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-700">💡 Include the loan name in the description to auto-reduce its balance.</div>}
-            {catLimit && (
-              <div className={`rounded-xl p-3 text-sm border ${catPct>=100?'bg-red-50 border-red-200 text-red-700':catPct>=80?'bg-amber-50 border-amber-200 text-amber-700':'bg-gray-50 border-gray-200 text-gray-600'}`}>
-                <div className="flex justify-between mb-1"><span>{cat} budget</span><span className="font-semibold">KES {Math.round(projectedCatSpend).toLocaleString()} / {catLimit.toLocaleString()}</span></div>
-                <div className="h-1.5 bg-white rounded-full overflow-hidden"><div className={`h-full ${catPct>=100?'bg-red-500':catPct>=80?'bg-amber-500':'bg-indigo-500'}`} style={{width:`${Math.min(catPct,100)}%`}}/></div>
-                {catPct>=100 && <p className="text-xs mt-1 font-medium">This will put you over the monthly limit.</p>}
-              </div>
-            )}
             <button onClick={sub} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-medium hover:bg-indigo-700 flex items-center justify-center gap-2 text-sm"><Icons.Plus size={18}/> Add Spending</button>
           </div>
 
@@ -1642,13 +1603,12 @@
     }
 
     // ── Setup Tab ─────────────────────────────────────────────────────────
-    function SetupTab({ salary,updSalary,fixed,addFixed,remFixed,balance,updBalance,addFunds,addFund,removeFund,activeSaves,updSave,rates,updRates,allCats,budgetLimits,setBudgetLimit,exportData }) {
+    function SetupTab({ salary,updSalary,fixed,addFixed,remFixed,balance,updBalance,addFunds,addFund,removeFund,activeSaves,updSave,rates,updRates,allCats,exportData }) {
       const [ns,setNs]=useState(salary); const [cn,setCn]=useState(''); const [ca,setCa]=useState(''); const [cd,setCd]=useState(''); const [nb,setNb]=useState(balance);
       const [fd,setFd]=useState(''); const [fa,setFa]=useState(''); const [fdt,setFdt]=useState(new Date().toISOString().split('T')[0]);
       const [selSaveId,setSelSaveId]=useState(''); const [saveAmt,setSaveAmt]=useState(''); const [saveOk,setSaveOk]=useState('');
       const [usdRate,setUsdRate]=useState(rates.USD||''); const [gbpRate,setGbpRate]=useState(rates.GBP||'');
       const [rateOk,setRateOk]=useState(false);
-      const [limCat,setLimCat]=useState('Food'); const [limAmt,setLimAmt]=useState('');
       const total=fixed.reduce((s,c)=>s+c.amount,0);
       const blockTotal=fixed.filter(c=>!c.recurDay).reduce((s,c)=>s+c.amount,0);
       const recurTotal=fixed.filter(c=>c.recurDay).reduce((s,c)=>s+c.amount,0);
@@ -1818,29 +1778,6 @@
               Save Exchange Rates
             </button>
             {rateOk&&<p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-xl p-3 font-medium">✓ Exchange rates updated</p>}
-          </div>
-
-          {/* Category budget limits */}
-          <div className="bg-gray-50 rounded-xl p-5 space-y-3">
-            <h3 className="font-semibold text-gray-700 flex items-center gap-2"><Icons.BarChart size={17}/> Monthly Budget Limits</h3>
-            <p className="text-xs text-gray-500">Set a monthly cap per category. You'll get a warning in the Spending tab as you approach or exceed it.</p>
-            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-              <select value={limCat} onChange={e=>{setLimCat(e.target.value); setLimAmt((budgetLimits||{})[e.target.value]||'');}} className="sm:col-span-5 px-2 py-2 border border-gray-300 rounded-lg text-sm outline-none bg-white">
-                {(allCats||['Food']).map(c=><option key={c} value={c}>{c}</option>)}
-              </select>
-              <input value={limAmt} onChange={e=>setLimAmt(e.target.value)} type="number" placeholder="Limit (KES) — blank to remove" className="sm:col-span-5 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400"/>
-              <button onClick={()=>setBudgetLimit(limCat,limAmt)} className="sm:col-span-2 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Set</button>
-            </div>
-            {Object.keys(budgetLimits||{}).length>0?(
-              <div className="flex flex-wrap gap-2 pt-1">
-                {Object.entries(budgetLimits).map(([c,lim])=>(
-                  <span key={c} className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-full flex items-center gap-1.5">
-                    {c}: KES {lim.toLocaleString()}
-                    <button onClick={()=>setBudgetLimit(c,'')} className="text-indigo-400 hover:text-red-500 leading-none font-bold">×</button>
-                  </span>
-                ))}
-              </div>
-            ):<p className="text-xs text-gray-400 italic">No limits set.</p>}
           </div>
 
           {/* Backup / export */}
