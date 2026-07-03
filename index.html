@@ -364,7 +364,6 @@
       const [customCats, setCustomCats] = useState([]);
       const [addFunds, setAddFunds] = useState([]);
       const [rates, setRates] = useState({USD:0, GBP:0});
-      const [recurring, setRecurring] = useState([]);
       const [budgetLimits, setBudgetLimits] = useState({});
       const [loading, setLoading] = useState(true);
       const [saveErr, setSaveErr] = useState('');
@@ -385,31 +384,33 @@
           if (data['custom-categories'])   setCustomCats(data['custom-categories']);
           if (data['additional-funds'])     setAddFunds(data['additional-funds']);
           if (data['exchange-rates'])       setRates(data['exchange-rates']);
-          if (data['recurring'])            setRecurring(data['recurring']);
           if (data['budget-limits'])        setBudgetLimits(data['budget-limits']);
-          postDueRecurring(data['recurring'], data['spending']);
+          postDueRecurring(data['fixed-costs'], data['spending']);
         } catch(e) { console.error('Load failed:', e.message); }
         setLoading(false);
       };
 
-      // Auto-post any recurring items due this month that haven't been posted yet
-      const postDueRecurring = (rec, existingSpend) => {
-        if (!rec || !rec.length) return;
+      // Auto-post any recurring fixed costs (those with a recurDay set) that are due
+      // this month and haven't been posted yet. Fixed costs without recurDay are
+      // deducted as a block via totalFixed and never post a transaction.
+      const postDueRecurring = (fixedCosts, existingSpend) => {
+        if (!fixedCosts || !fixedCosts.length) return;
         const now = new Date();
         const moTag = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
         const sp = existingSpend || [];
         const toAdd = [];
-        rec.forEach(r => {
-          if (r.paused) return;
-          if (now.getDate() < (r.dayOfMonth||1)) return; // not due yet this month
-          const already = sp.some(s => s.recurringId===r.id && s.recurringMonth===moTag);
+        fixedCosts.forEach(c => {
+          const rd = parseInt(c.recurDay);
+          if (!rd || rd < 1) return;                 // block-deduction cost, skip
+          if (now.getDate() < rd) return;            // not due yet this month
+          const already = sp.some(s => s.fixedId===c.id && s.recurringMonth===moTag);
           if (already) return;
-          const day = Math.min(r.dayOfMonth||1, new Date(now.getFullYear(), now.getMonth()+1, 0).getDate());
+          const day = Math.min(rd, new Date(now.getFullYear(), now.getMonth()+1, 0).getDate());
           toAdd.push({
             id: Date.now()+Math.floor(Math.random()*10000),
-            description: r.description, amount: r.amount, currency:'KES', kesAmount:r.amount,
-            category: r.category, date: new Date(now.getFullYear(), now.getMonth(), day).toISOString(),
-            recurringId: r.id, recurringMonth: moTag,
+            description: c.name, amount: c.amount, currency:'KES', kesAmount:c.amount,
+            category: 'Bills', date: new Date(now.getFullYear(), now.getMonth(), day).toISOString(),
+            fixedId: c.id, recurringMonth: moTag,
           });
         });
         if (toAdd.length) {
@@ -432,8 +433,21 @@
       const updSalary  = v => { setSalary(v); save('salary', v); };
       const updBalance = v => { setBal(v);    save('monthly-balance', v); };
 
-      const addFixed = (n,a) => { const x=[...fixed,{id:Date.now(),name:n,amount:parseFloat(a)}]; setFixed(x); save('fixed-costs',x); };
-      const remFixed = id  => { const x=fixed.filter(c=>c.id!==id); setFixed(x); save('fixed-costs',x); };
+      const addFixed = (n,a,recurDay) => {
+        const rd = parseInt(recurDay);
+        const c = {id:Date.now(),name:n,amount:parseFloat(a), ...(rd>=1 && rd<=31 ? {recurDay:rd} : {})};
+        const x=[...fixed,c]; setFixed(x); save('fixed-costs',x);
+        if (c.recurDay) postDueRecurring(x, spend);   // post immediately if today >= recurDay
+      };
+      const remFixed = id  => {
+        const x=fixed.filter(c=>c.id!==id); setFixed(x); save('fixed-costs',x);
+        // remove this month's auto-posted transaction for the removed cost (keeps history clean going forward)
+        const now=new Date(); const moTag=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+        if (spend.some(s=>s.fixedId===id && s.recurringMonth===moTag)) {
+          const ns=spend.filter(s=>!(s.fixedId===id && s.recurringMonth===moTag));
+          setSpend(ns); save('spending',ns);
+        }
+      };
 
       const today = () => new Date().toISOString().split('T')[0];
 
@@ -528,13 +542,6 @@
       const addLoan = (n,pr,r,py) => { const nl=[...loans,{id:Date.now(),name:n,principal:parseFloat(pr),currentBalance:parseFloat(pr),interestRate:parseFloat(r||0),monthlyPayment:parseFloat(py),startDate:new Date().toISOString()}]; setLoans(nl); save('loans',nl); };
       const remLoan = id => { const x=loans.filter(l=>l.id!==id); setLoans(x); save('loans',x); };
 
-      const addRecurring = (description, amount, category, dayOfMonth) => {
-        const x=[...recurring, {id:Date.now(), description, amount:parseFloat(amount), category, dayOfMonth:parseInt(dayOfMonth), paused:false}];
-        setRecurring(x); save('recurring', x);
-      };
-      const remRecurring = id => { const x=recurring.filter(r=>r.id!==id); setRecurring(x); save('recurring',x); };
-      const toggleRecurring = id => { const x=recurring.map(r=>r.id===id?{...r,paused:!r.paused}:r); setRecurring(x); save('recurring',x); };
-
       const setBudgetLimit = (cat, amount) => {
         const x = {...budgetLimits};
         if (!amount || parseFloat(amount)<=0) delete x[cat]; else x[cat]=parseFloat(amount);
@@ -544,7 +551,7 @@
       const exportData = (fmt) => {
         const now = new Date().toISOString().split('T')[0];
         if (fmt==='json') {
-          const blob = { exportedAt:new Date().toISOString(), user, salary, balance, fixed, spend, saves, plans, loans, addFunds, recurring, budgetLimits, customCats, rates };
+          const blob = { exportedAt:new Date().toISOString(), user, salary, balance, fixed, spend, saves, plans, loans, addFunds, budgetLimits, customCats, rates };
           const url = URL.createObjectURL(new Blob([JSON.stringify(blob,null,2)], {type:'application/json'}));
           const a=document.createElement('a'); a.href=url; a.download=`budget-backup-${now}.json`; a.click(); URL.revokeObjectURL(url);
         } else {
@@ -587,7 +594,9 @@
         return `${c.sym} ${amount.toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:2})}`;
       };
 
-      const totalFixed = fixed.reduce((s,c)=>s+c.amount,0);
+      // Only block-deduction costs count toward totalFixed; recurring ones post as
+      // dated transactions and are captured in thisMonthSpend instead (no double-count).
+      const totalFixed = fixed.filter(c=>!c.recurDay).reduce((s,c)=>s+c.amount,0);
       // totalSaved converts each goal to KES for dashboard display
       const totalSaved = saves.reduce((s,g)=>s+toKES(g.current, g.currency),0);
       const now        = new Date();
@@ -666,7 +675,7 @@
               {tab==='loans'     && <LoansTab     loans={activeLoans} addLoan={addLoan} remLoan={remLoan}/>}
               {tab==='future'    && <FuturePlansTab plans={activePlans} addPlan={addPlan} remPlan={remPlan} salary={salary} totalFixed={totalFixed}/>}
               {tab==='analytics' && <AnalyticsTab spend={spend} addFunds={addFunds} salary={salary} totalFixed={totalFixed}/>}
-              {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance} addFunds={addFunds} addFund={addFund} removeFund={removeFund} activeSaves={activeSaves} updSave={updSave} rates={rates} updRates={updRates} recurring={recurring} addRecurring={addRecurring} remRecurring={remRecurring} toggleRecurring={toggleRecurring} allCats={allCats} budgetLimits={budgetLimits} setBudgetLimit={setBudgetLimit} exportData={exportData}/>}
+              {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance} addFunds={addFunds} addFund={addFund} removeFund={removeFund} activeSaves={activeSaves} updSave={updSave} rates={rates} updRates={updRates} allCats={allCats} budgetLimits={budgetLimits} setBudgetLimit={setBudgetLimit} exportData={exportData}/>}
               {tab==='users'     && isAdmin && <UsersTab/>}
             </div>
           </div>
@@ -790,7 +799,7 @@
                 {inGrace&&<p className="text-xs text-amber-700 mt-0.5 font-medium">⚠ Grace period — closes after day {GRACE_DAYS}</p>}
               </div>
               {!showRecon&&(
-                <button onClick={()=>{setRCosts(fixed.map(c=>({...c})));setMissed([]);setShowRecon(true);}}
+                <button onClick={()=>{setRCosts(fixed.filter(c=>!c.recurDay).map(c=>({...c})));setMissed([]);setShowRecon(true);}}
                   className={`text-white px-4 py-2 rounded-lg text-sm font-medium ${inGrace?'bg-amber-500 hover:bg-amber-600':'bg-green-600 hover:bg-green-700'}`}>
                   Start
                 </button>
@@ -1215,7 +1224,7 @@
                 </div>
               ) : (
                 <div key={s.id} className="bg-gray-50 rounded-xl p-3.5 flex items-center justify-between mb-2">
-                  <div><p className="font-medium text-gray-800 text-sm">{new Date(s.date).toLocaleDateString('en-GB')} — {s.description}</p><p className="text-xs text-gray-400">{s.category}{s.recurringId?' · recurring':''}</p></div>
+                  <div><p className="font-medium text-gray-800 text-sm">{new Date(s.date).toLocaleDateString('en-GB')} — {s.description}</p><p className="text-xs text-gray-400">{s.category}{s.fixedId?' · recurring':''}</p></div>
                   <div className="flex items-center gap-2"><p className="font-bold text-gray-800 text-sm">KES {s.amount.toLocaleString()}</p><button onClick={()=>startEdit(s)} className="text-indigo-400 hover:text-indigo-600 p-1.5 hover:bg-indigo-50 rounded-lg"><Icons.Edit2 size={15}/></button><button onClick={()=>remSpend(s.id)} className="text-red-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg"><Icons.Trash2 size={16}/></button></div>
                 </div>
               )
@@ -1633,15 +1642,16 @@
     }
 
     // ── Setup Tab ─────────────────────────────────────────────────────────
-    function SetupTab({ salary,updSalary,fixed,addFixed,remFixed,balance,updBalance,addFunds,addFund,removeFund,activeSaves,updSave,rates,updRates,recurring,addRecurring,remRecurring,toggleRecurring,allCats,budgetLimits,setBudgetLimit,exportData }) {
-      const [ns,setNs]=useState(salary); const [cn,setCn]=useState(''); const [ca,setCa]=useState(''); const [nb,setNb]=useState(balance);
+    function SetupTab({ salary,updSalary,fixed,addFixed,remFixed,balance,updBalance,addFunds,addFund,removeFund,activeSaves,updSave,rates,updRates,allCats,budgetLimits,setBudgetLimit,exportData }) {
+      const [ns,setNs]=useState(salary); const [cn,setCn]=useState(''); const [ca,setCa]=useState(''); const [cd,setCd]=useState(''); const [nb,setNb]=useState(balance);
       const [fd,setFd]=useState(''); const [fa,setFa]=useState(''); const [fdt,setFdt]=useState(new Date().toISOString().split('T')[0]);
       const [selSaveId,setSelSaveId]=useState(''); const [saveAmt,setSaveAmt]=useState(''); const [saveOk,setSaveOk]=useState('');
       const [usdRate,setUsdRate]=useState(rates.USD||''); const [gbpRate,setGbpRate]=useState(rates.GBP||'');
       const [rateOk,setRateOk]=useState(false);
-      const [rDesc,setRDesc]=useState(''); const [rAmt,setRAmt]=useState(''); const [rCat,setRCat]=useState('Bills'); const [rDay,setRDay]=useState('1');
       const [limCat,setLimCat]=useState('Food'); const [limAmt,setLimAmt]=useState('');
       const total=fixed.reduce((s,c)=>s+c.amount,0);
+      const blockTotal=fixed.filter(c=>!c.recurDay).reduce((s,c)=>s+c.amount,0);
+      const recurTotal=fixed.filter(c=>c.recurDay).reduce((s,c)=>s+c.amount,0);
 
       const now=new Date();
       const thisMonthFunds=addFunds.filter(f=>{const d=new Date(f.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
@@ -1752,14 +1762,28 @@
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <h3 className="font-semibold text-gray-700">Fixed Monthly Costs</h3>
             <div><label className="block text-sm font-medium text-gray-700 mb-1">Cost Name</label><input type="text" value={cn} onChange={e=>setCn(e.target.value)} placeholder="e.g., Rent, Internet" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
-            <div><label className="block text-sm font-medium text-gray-700 mb-1">Amount (KES)</label><input type="number" value={ca} onChange={e=>setCa(e.target.value)} placeholder="0" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
-            <button onClick={()=>{if(cn&&ca){addFixed(cn,ca);setCn('');setCa('');}}} className="w-full bg-indigo-600 text-white py-2.5 rounded-xl font-medium hover:bg-indigo-700 flex items-center justify-center gap-2 text-sm"><Icons.Plus size={18}/> Add Fixed Cost</button>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="block text-sm font-medium text-gray-700 mb-1">Amount (KES)</label><input type="number" value={ca} onChange={e=>setCa(e.target.value)} placeholder="0" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Recurs on day</label>
+                <select value={cd} onChange={e=>setCd(e.target.value)} className="w-full px-3 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+                  <option value="">No — deduct as block</option>
+                  {Array.from({length:28},(_,i)=>i+1).map(d=><option key={d} value={d}>Day {d}</option>)}
+                </select>
+              </div>
+            </div>
+            <p className="text-xs text-gray-400">Pick a day and this cost auto-posts to your Spending each month (so it shows in Analytics). Leave as "block" to deduct it in one lump on the 1st, as before.</p>
+            <button onClick={()=>{if(cn&&ca){addFixed(cn,ca,cd);setCn('');setCa('');setCd('');}}} className="w-full bg-indigo-600 text-white py-2.5 rounded-xl font-medium hover:bg-indigo-700 flex items-center justify-center gap-2 text-sm"><Icons.Plus size={18}/> Add Fixed Cost</button>
             {fixed.length>0&&(
               <div className="space-y-2 pt-2">
                 <div className="flex justify-between text-sm font-semibold text-gray-700 pb-2 border-b border-gray-200"><span>Total Fixed Costs</span><span>KES {total.toLocaleString()}</span></div>
+                {recurTotal>0&&<div className="flex justify-between text-xs text-gray-400 -mt-1"><span>Block: KES {blockTotal.toLocaleString()} · Recurring: KES {recurTotal.toLocaleString()}</span></div>}
                 {fixed.map(c=>(
                   <div key={c.id} className="bg-white rounded-xl p-3 flex items-center justify-between">
-                    <div><p className="font-medium text-gray-800 text-sm">{c.name}</p><p className="text-xs text-gray-400">KES {c.amount.toLocaleString()}</p></div>
+                    <div>
+                      <p className="font-medium text-gray-800 text-sm">{c.name}</p>
+                      <p className="text-xs text-gray-400">KES {c.amount.toLocaleString()}{c.recurDay?<span className="ml-1.5 text-indigo-500 font-medium">· recurs day {c.recurDay}</span>:<span className="ml-1.5 text-gray-400">· block</span>}</p>
+                    </div>
                     <button onClick={()=>remFixed(c.id)} className="text-red-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg"><Icons.Trash2 size={16}/></button>
                   </div>
                 ))}
@@ -1794,36 +1818,6 @@
               Save Exchange Rates
             </button>
             {rateOk&&<p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-xl p-3 font-medium">✓ Exchange rates updated</p>}
-          </div>
-
-          {/* Recurring transactions */}
-          <div className="bg-gray-50 rounded-xl p-5 space-y-3">
-            <h3 className="font-semibold text-gray-700 flex items-center gap-2"><Icons.Calendar size={17}/> Recurring Transactions</h3>
-            <p className="text-xs text-gray-500">Auto-posted to spending each month on the chosen day. Runs when you open the app on or after that day.</p>
-            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-              <input value={rDesc} onChange={e=>setRDesc(e.target.value)} placeholder="e.g., Rent, Netflix" className="sm:col-span-4 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400"/>
-              <input value={rAmt} onChange={e=>setRAmt(e.target.value)} type="number" placeholder="KES" className="sm:col-span-3 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400"/>
-              <select value={rCat} onChange={e=>setRCat(e.target.value)} className="sm:col-span-3 px-2 py-2 border border-gray-300 rounded-lg text-sm outline-none bg-white">
-                {(allCats||['Bills']).map(c=><option key={c} value={c}>{c}</option>)}
-              </select>
-              <select value={rDay} onChange={e=>setRDay(e.target.value)} className="sm:col-span-2 px-2 py-2 border border-gray-300 rounded-lg text-sm outline-none bg-white">
-                {Array.from({length:28},(_,i)=>i+1).map(d=><option key={d} value={d}>Day {d}</option>)}
-              </select>
-            </div>
-            <button onClick={()=>{if(rDesc&&rAmt){addRecurring(rDesc,rAmt,rCat,rDay);setRDesc('');setRAmt('');}}} className="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Add Recurring</button>
-            {recurring&&recurring.length>0?(
-              <div className="space-y-2 pt-1">
-                {recurring.map(r=>(
-                  <div key={r.id} className={`bg-white rounded-lg p-3 flex items-center justify-between ${r.paused?'opacity-50':''}`}>
-                    <div><p className="text-sm font-medium text-gray-800">{r.description}</p><p className="text-xs text-gray-400">{r.category} · day {r.dayOfMonth} · KES {r.amount.toLocaleString()}/mo{r.paused?' · paused':''}</p></div>
-                    <div className="flex items-center gap-1">
-                      <button onClick={()=>toggleRecurring(r.id)} className="text-xs px-2 py-1 rounded-lg text-gray-500 hover:bg-gray-100 font-medium">{r.paused?'Resume':'Pause'}</button>
-                      <button onClick={()=>remRecurring(r.id)} className="text-red-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg"><Icons.Trash2 size={15}/></button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ):<p className="text-xs text-gray-400 italic">No recurring transactions yet.</p>}
           </div>
 
           {/* Category budget limits */}
