@@ -364,6 +364,8 @@
       const [customCats, setCustomCats] = useState([]);
       const [addFunds, setAddFunds] = useState([]);
       const [rates, setRates] = useState({USD:0, GBP:0});
+      const [recurring, setRecurring] = useState([]);
+      const [budgetLimits, setBudgetLimits] = useState({});
       const [loading, setLoading] = useState(true);
       const [saveErr, setSaveErr] = useState('');
 
@@ -383,8 +385,37 @@
           if (data['custom-categories'])   setCustomCats(data['custom-categories']);
           if (data['additional-funds'])     setAddFunds(data['additional-funds']);
           if (data['exchange-rates'])       setRates(data['exchange-rates']);
+          if (data['recurring'])            setRecurring(data['recurring']);
+          if (data['budget-limits'])        setBudgetLimits(data['budget-limits']);
+          postDueRecurring(data['recurring'], data['spending']);
         } catch(e) { console.error('Load failed:', e.message); }
         setLoading(false);
+      };
+
+      // Auto-post any recurring items due this month that haven't been posted yet
+      const postDueRecurring = (rec, existingSpend) => {
+        if (!rec || !rec.length) return;
+        const now = new Date();
+        const moTag = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+        const sp = existingSpend || [];
+        const toAdd = [];
+        rec.forEach(r => {
+          if (r.paused) return;
+          if (now.getDate() < (r.dayOfMonth||1)) return; // not due yet this month
+          const already = sp.some(s => s.recurringId===r.id && s.recurringMonth===moTag);
+          if (already) return;
+          const day = Math.min(r.dayOfMonth||1, new Date(now.getFullYear(), now.getMonth()+1, 0).getDate());
+          toAdd.push({
+            id: Date.now()+Math.floor(Math.random()*10000),
+            description: r.description, amount: r.amount, currency:'KES', kesAmount:r.amount,
+            category: r.category, date: new Date(now.getFullYear(), now.getMonth(), day).toISOString(),
+            recurringId: r.id, recurringMonth: moTag,
+          });
+        });
+        if (toAdd.length) {
+          const merged = [...sp, ...toAdd];
+          setSpend(merged); save('spending', merged);
+        }
       };
 
       const save = async (key, value) => {
@@ -452,6 +483,10 @@
         }
       };
       const remSpend = id => { const x=spend.filter(s=>s.id!==id); setSpend(x); save('spending',x); };
+      const updSpendItem = (id, fields) => {
+        const x = spend.map(s => s.id===id ? {...s, ...fields, kesAmount: fields.amount!=null ? parseFloat(fields.amount) : s.kesAmount} : s);
+        setSpend(x); save('spending',x);
+      };
 
       const addSave = (n,t,currency='KES') => { const x=[...saves,{id:Date.now(),name:n,target:parseFloat(t),current:0,currency:currency||'KES'}]; setSaves(x); save('savings',x); };
       const updSave = (id,a) => {
@@ -492,6 +527,35 @@
 
       const addLoan = (n,pr,r,py) => { const nl=[...loans,{id:Date.now(),name:n,principal:parseFloat(pr),currentBalance:parseFloat(pr),interestRate:parseFloat(r||0),monthlyPayment:parseFloat(py),startDate:new Date().toISOString()}]; setLoans(nl); save('loans',nl); };
       const remLoan = id => { const x=loans.filter(l=>l.id!==id); setLoans(x); save('loans',x); };
+
+      const addRecurring = (description, amount, category, dayOfMonth) => {
+        const x=[...recurring, {id:Date.now(), description, amount:parseFloat(amount), category, dayOfMonth:parseInt(dayOfMonth), paused:false}];
+        setRecurring(x); save('recurring', x);
+      };
+      const remRecurring = id => { const x=recurring.filter(r=>r.id!==id); setRecurring(x); save('recurring',x); };
+      const toggleRecurring = id => { const x=recurring.map(r=>r.id===id?{...r,paused:!r.paused}:r); setRecurring(x); save('recurring',x); };
+
+      const setBudgetLimit = (cat, amount) => {
+        const x = {...budgetLimits};
+        if (!amount || parseFloat(amount)<=0) delete x[cat]; else x[cat]=parseFloat(amount);
+        setBudgetLimits(x); save('budget-limits', x);
+      };
+
+      const exportData = (fmt) => {
+        const now = new Date().toISOString().split('T')[0];
+        if (fmt==='json') {
+          const blob = { exportedAt:new Date().toISOString(), user, salary, balance, fixed, spend, saves, plans, loans, addFunds, recurring, budgetLimits, customCats, rates };
+          const url = URL.createObjectURL(new Blob([JSON.stringify(blob,null,2)], {type:'application/json'}));
+          const a=document.createElement('a'); a.href=url; a.download=`budget-backup-${now}.json`; a.click(); URL.revokeObjectURL(url);
+        } else {
+          const rows = [['Date','Description','Category','Currency','Amount (native)','Amount (KES)']];
+          [...spend].sort((a,b)=>new Date(b.date)-new Date(a.date)).forEach(s=>{
+            rows.push([new Date(s.date).toISOString().split('T')[0], `"${(s.description||'').replace(/"/g,'""')}"`, s.category, s.currency||'KES', s.amount, s.kesAmount!=null?s.kesAmount:s.amount]);
+          });
+          const url = URL.createObjectURL(new Blob([rows.map(r=>r.join(',')).join('\n')], {type:'text/csv'}));
+          const a=document.createElement('a'); a.href=url; a.download=`spending-${now}.csv`; a.click(); URL.revokeObjectURL(url);
+        }
+      };
 
       const DEFAULT_CATS = ['Food','Transport','Entertainment','Shopping','Bills','Savings','Loan Payment','Other'];
       const allCats = [...DEFAULT_CATS, ...customCats.filter(c => !DEFAULT_CATS.includes(c))];
@@ -542,6 +606,11 @@
       const activeLoans = loans.filter(l => !prevMonth(l.completedAt));
       const activePlans = plans.filter(p => !prevMonth(p.completedAt));
 
+      // This-month spend per category (for budget-limit warnings)
+      const monthCatSpend = {};
+      spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();})
+        .forEach(s=>{ monthCatSpend[s.category]=(monthCatSpend[s.category]||0)+s.amount; });
+
       const TABS = [
         {id:'dashboard',label:'Dashboard',    I:Icons.DollarSign},
         {id:'spending', label:'Spending',     I:Icons.TrendingDown},
@@ -555,7 +624,7 @@
 
       if (loading) return <Spinner msg="Loading your data…" />;
 
-      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,updPlan,addLoan,remLoan,updSalary,allCats,addFunds,thisMonthAddFunds,rates,updRates,toKES,fmtCurr,CURR };
+      const ctx = { salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFixed,remFixed,addSave,updSave,remSave,addPlan,remPlan,updPlan,addLoan,remLoan,updSalary,allCats,addFunds,thisMonthAddFunds,rates,updRates,toKES,fmtCurr,CURR,budgetLimits,monthCatSpend };
 
       return (
         <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
@@ -592,12 +661,12 @@
 
             <div className="bg-white rounded-2xl shadow-sm p-5 md:p-6">
               {tab==='dashboard' && <Dashboard {...ctx}/>}
-              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat} saves={activeSaves} plans={activePlans} rates={rates} toKES={toKES} fmtCurr={fmtCurr} CURR={CURR}/>}
+              {tab==='spending'  && <SpendingTab  spend={spend}  addSpend={addSpend}  remSpend={remSpend} updSpendItem={updSpendItem} allCats={allCats} customCats={customCats} addCustomCat={addCustomCat} removeCustomCat={removeCustomCat} saves={activeSaves} plans={activePlans} rates={rates} toKES={toKES} fmtCurr={fmtCurr} CURR={CURR} budgetLimits={budgetLimits} monthCatSpend={monthCatSpend}/>}
               {tab==='savings'   && <SavingsTab   saves={activeSaves} addSave={addSave} updSave={updSave} remSave={remSave} updSaveCurrency={updSaveCurrency} rates={rates} toKES={toKES} fmtCurr={fmtCurr} CURR={CURR}/>}
               {tab==='loans'     && <LoansTab     loans={activeLoans} addLoan={addLoan} remLoan={remLoan}/>}
               {tab==='future'    && <FuturePlansTab plans={activePlans} addPlan={addPlan} remPlan={remPlan} salary={salary} totalFixed={totalFixed}/>}
               {tab==='analytics' && <AnalyticsTab spend={spend} addFunds={addFunds} salary={salary} totalFixed={totalFixed}/>}
-              {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance} addFunds={addFunds} addFund={addFund} removeFund={removeFund} activeSaves={activeSaves} updSave={updSave} rates={rates} updRates={updRates}/>}
+              {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance} addFunds={addFunds} addFund={addFund} removeFund={removeFund} activeSaves={activeSaves} updSave={updSave} rates={rates} updRates={updRates} recurring={recurring} addRecurring={addRecurring} remRecurring={remRecurring} toggleRecurring={toggleRecurring} allCats={allCats} budgetLimits={budgetLimits} setBudgetLimit={setBudgetLimit} exportData={exportData}/>}
               {tab==='users'     && isAdmin && <UsersTab/>}
             </div>
           </div>
@@ -615,7 +684,15 @@
     );
 
     // ── Dashboard ─────────────────────────────────────────────────────────
-    function Dashboard({ salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFunds,thisMonthAddFunds }) {
+    function Dashboard({ salary,totalFixed,totalSaved,freeCash,fixed,spend,saves,loans,plans,activeSaves,activeLoans,activePlans,balance,updBalance,addSpend,addFunds,thisMonthAddFunds,allCats,budgetLimits,monthCatSpend }) {
+      const [qDesc,setQDesc]=useState(''); const [qAmt,setQAmt]=useState(''); const [qCat,setQCat]=useState('Food'); const [qMsg,setQMsg]=useState('');
+      const quickAdd=()=>{
+        if(!qDesc||!qAmt)return;
+        addSpend(qDesc, parseFloat(qAmt), qCat, new Date().toISOString());
+        setQMsg(`Added: ${qDesc} · KES ${parseFloat(qAmt).toLocaleString()}`);
+        setQDesc(''); setQAmt('');
+        setTimeout(()=>setQMsg(''), 2500);
+      };
       const [showRecon,setShowRecon]=useState(false);
       const [bank,setBank]=useState(''); const [cash,setCash]=useState(''); const [mpesa,setMpesa]=useState('');
       const [rCosts,setRCosts]=useState([]); const [missed,setMissed]=useState([]); const [editC,setEditC]=useState(null);
@@ -671,6 +748,20 @@
             <MetricCard title="Fixed Costs"       value={totalFixed}       color="red"/>
             <MetricCard title="This Month"        value={thisTotal}        color="orange"/>
             <MetricCard title="Available"         value={freeCash}         color={freeCash>=0?'blue':'red'}/>
+          </div>
+
+          {/* Quick add expense */}
+          <div className="bg-white border-2 border-indigo-100 rounded-xl p-4">
+            <div className="flex items-center gap-2 mb-3"><Icons.Plus size={16} className="text-indigo-600"/><h3 className="font-semibold text-gray-700 text-sm">Quick Add Expense</h3></div>
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+              <input value={qDesc} onChange={e=>setQDesc(e.target.value)} onKeyDown={e=>e.key==='Enter'&&quickAdd()} placeholder="Description" className="sm:col-span-5 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400"/>
+              <input value={qAmt} onChange={e=>setQAmt(e.target.value)} onKeyDown={e=>e.key==='Enter'&&quickAdd()} type="number" placeholder="KES" className="sm:col-span-3 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400"/>
+              <select value={qCat} onChange={e=>setQCat(e.target.value)} className="sm:col-span-2 px-2 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+                {(allCats||['Food','Transport','Other']).map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+              <button onClick={quickAdd} className="sm:col-span-2 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Add</button>
+            </div>
+            {qMsg && <p className="text-xs text-green-600 mt-2 font-medium">{qMsg}</p>}
           </div>
 
           <div className="bg-gradient-to-br from-indigo-50 to-purple-50 border-2 border-indigo-200 rounded-xl p-5">
@@ -893,7 +984,7 @@
     }
 
     // ── Spending Tab ──────────────────────────────────────────────────────
-    function SpendingTab({ spend, addSpend, remSpend, allCats, customCats, addCustomCat, removeCustomCat, saves, plans, rates, toKES, fmtCurr, CURR }) {
+    function SpendingTab({ spend, addSpend, remSpend, updSpendItem, allCats, customCats, addCustomCat, removeCustomCat, saves, plans, rates, toKES, fmtCurr, CURR, budgetLimits, monthCatSpend }) {
       const [desc,setDesc]=useState(''); const [amt,setAmt]=useState(''); const [cat,setCat]=useState('Other');
       const [date,setDate]=useState(new Date().toISOString().split('T')[0]);
       const [savingsGoalId,setSavingsGoalId]=useState('');
@@ -901,6 +992,9 @@
       const [planGoalId,setPlanGoalId]=useState('');
       const [newCat,setNewCat]=useState(''); const [showCatMgr,setShowCatMgr]=useState(false);
       const [catErr,setCatErr]=useState('');
+      const [query,setQuery]=useState(''); const [filterCat,setFilterCat]=useState('ALL');
+      const [editId,setEditId]=useState(null);
+      const [eDesc,setEDesc]=useState(''); const [eAmt,setEAmt]=useState(''); const [eCat,setECat]=useState(''); const [eDate,setEDate]=useState('');
       const now=new Date();
       const thisMo=spend.filter(s=>{const d=new Date(s.date);return d.getMonth()===now.getMonth()&&d.getFullYear()===now.getFullYear();});
       const total=thisMo.reduce((s,e)=>s+e.amount,0);
@@ -950,10 +1044,44 @@
 
       const currLabel = CURR[spendCurrency]?.sym || spendCurrency;
 
+      // Budget-limit status for the currently selected category
+      const catLimit = (budgetLimits||{})[cat];
+      const catSpent = (monthCatSpend||{})[cat]||0;
+      const projectedCatSpend = catSpent + (parseFloat(amt||0)||0);
+      const catPct = catLimit ? (projectedCatSpend/catLimit)*100 : 0;
+
+      // Over/near-limit categories for the summary banner
+      const limitAlerts = Object.entries(budgetLimits||{}).map(([c,lim])=>{
+        const sp=(monthCatSpend||{})[c]||0; const pct=(sp/lim)*100;
+        return {c,lim,sp,pct};
+      }).filter(a=>a.pct>=80).sort((a,b)=>b.pct-a.pct);
+
+      const startEdit=(s)=>{ setEditId(s.id); setEDesc(s.description); setEAmt(s.amount); setECat(s.category); setEDate(new Date(s.date).toISOString().split('T')[0]); };
+      const saveEdit=(s)=>{
+        updSpendItem(s.id, { description:eDesc, amount:parseFloat(eAmt), category:eCat, date:new Date(eDate).toISOString(), currency:'KES' });
+        setEditId(null);
+      };
+
+      const filtered = spend
+        .filter(s=> filterCat==='ALL' || s.category===filterCat)
+        .filter(s=> !query || (s.description||'').toLowerCase().includes(query.toLowerCase()))
+        .sort((a,b)=>new Date(b.date)-new Date(a.date));
+
       return (
         <div className="space-y-6">
           <h2 className="text-2xl font-bold text-gray-800">Track Spending</h2>
           <div className="bg-indigo-50 border-2 border-indigo-200 rounded-xl p-4"><p className="text-sm text-indigo-600 font-medium">This Month</p><p className="text-3xl font-bold text-indigo-900">KES {total.toLocaleString()}</p><p className="text-xs text-indigo-400 mt-1">{thisMo.length} transactions</p></div>
+
+          {limitAlerts.length>0 && (
+            <div className="space-y-2">
+              {limitAlerts.map(a=>(
+                <div key={a.c} className={`rounded-xl px-4 py-2.5 text-sm flex items-center justify-between border-2 ${a.pct>=100?'bg-red-50 border-red-200 text-red-700':'bg-amber-50 border-amber-200 text-amber-700'}`}>
+                  <span className="font-medium flex items-center gap-2"><Icons.AlertCircle size={15}/> {a.c}: KES {Math.round(a.sp).toLocaleString()} of {a.lim.toLocaleString()}</span>
+                  <span className="font-bold">{a.pct.toFixed(0)}%{a.pct>=100?' — over budget':''}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="bg-gray-50 rounded-xl p-4 space-y-3">
             <div><label className="block text-sm font-medium text-gray-700 mb-1">What did you spend on?</label><input type="text" value={desc} onChange={e=>setDesc(e.target.value)} placeholder="e.g., Lunch at Java House" className="w-full px-4 py-2.5 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400"/></div>
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
@@ -1011,6 +1139,13 @@
             )}
 
             {cat==='Loan Payment'&&<div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-700">💡 Include the loan name in the description to auto-reduce its balance.</div>}
+            {catLimit && (
+              <div className={`rounded-xl p-3 text-sm border ${catPct>=100?'bg-red-50 border-red-200 text-red-700':catPct>=80?'bg-amber-50 border-amber-200 text-amber-700':'bg-gray-50 border-gray-200 text-gray-600'}`}>
+                <div className="flex justify-between mb-1"><span>{cat} budget</span><span className="font-semibold">KES {Math.round(projectedCatSpend).toLocaleString()} / {catLimit.toLocaleString()}</span></div>
+                <div className="h-1.5 bg-white rounded-full overflow-hidden"><div className={`h-full ${catPct>=100?'bg-red-500':catPct>=80?'bg-amber-500':'bg-indigo-500'}`} style={{width:`${Math.min(catPct,100)}%`}}/></div>
+                {catPct>=100 && <p className="text-xs mt-1 font-medium">This will put you over the monthly limit.</p>}
+              </div>
+            )}
             <button onClick={sub} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-medium hover:bg-indigo-700 flex items-center justify-center gap-2 text-sm"><Icons.Plus size={18}/> Add Spending</button>
           </div>
 
@@ -1050,13 +1185,41 @@
           </div>
 
           <div>
-            <h3 className="font-semibold text-gray-700 mb-3 text-sm">All Transactions</h3>
-            {spend.length>0?spend.sort((a,b)=>new Date(b.date)-new Date(a.date)).map(s=>(
-              <div key={s.id} className="bg-gray-50 rounded-xl p-3.5 flex items-center justify-between mb-2">
-                <div><p className="font-medium text-gray-800 text-sm">{new Date(s.date).toLocaleDateString('en-GB')} — {s.description}</p><p className="text-xs text-gray-400">{s.category}</p></div>
-                <div className="flex items-center gap-3"><p className="font-bold text-gray-800 text-sm">KES {s.amount.toLocaleString()}</p><button onClick={()=>remSpend(s.id)} className="text-red-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg"><Icons.Trash2 size={16}/></button></div>
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <h3 className="font-semibold text-gray-700 text-sm">All Transactions</h3>
+              <div className="flex gap-2">
+                <input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search…" className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400 w-32"/>
+                <select value={filterCat} onChange={e=>setFilterCat(e.target.value)} className="px-2 py-1.5 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+                  <option value="ALL">All categories</option>
+                  {allCats.map(c=><option key={c} value={c}>{c}</option>)}
+                </select>
               </div>
-            )):<p className="text-gray-400 text-center py-10 text-sm">No spending recorded yet</p>}
+            </div>
+            {(query||filterCat!=='ALL') && <p className="text-xs text-gray-400 mb-2">{filtered.length} match{filtered.length!==1?'es':''} · KES {filtered.reduce((t,s)=>t+s.amount,0).toLocaleString()}</p>}
+            {filtered.length>0?filtered.map(s=>(
+              editId===s.id ? (
+                <div key={s.id} className="bg-white border-2 border-indigo-200 rounded-xl p-3 mb-2 space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                    <input value={eDesc} onChange={e=>setEDesc(e.target.value)} className="sm:col-span-5 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400"/>
+                    <input value={eAmt} onChange={e=>setEAmt(e.target.value)} type="number" className="sm:col-span-2 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400"/>
+                    <select value={eCat} onChange={e=>setECat(e.target.value)} className="sm:col-span-3 px-2 py-2 border border-gray-300 rounded-lg text-sm outline-none bg-white">
+                      {allCats.map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <input value={eDate} onChange={e=>setEDate(e.target.value)} type="date" className="sm:col-span-2 px-2 py-2 border border-gray-300 rounded-lg text-sm outline-none"/>
+                  </div>
+                  {['Savings','Loan Payment','Future Plan'].includes(s.category) && <p className="text-xs text-amber-600">Note: editing won't re-adjust the linked goal/loan balance — adjust that manually if needed.</p>}
+                  <div className="flex gap-2 justify-end">
+                    <button onClick={()=>setEditId(null)} className="px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-100 rounded-lg">Cancel</button>
+                    <button onClick={()=>saveEdit(s)} className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700">Save</button>
+                  </div>
+                </div>
+              ) : (
+                <div key={s.id} className="bg-gray-50 rounded-xl p-3.5 flex items-center justify-between mb-2">
+                  <div><p className="font-medium text-gray-800 text-sm">{new Date(s.date).toLocaleDateString('en-GB')} — {s.description}</p><p className="text-xs text-gray-400">{s.category}{s.recurringId?' · recurring':''}</p></div>
+                  <div className="flex items-center gap-2"><p className="font-bold text-gray-800 text-sm">KES {s.amount.toLocaleString()}</p><button onClick={()=>startEdit(s)} className="text-indigo-400 hover:text-indigo-600 p-1.5 hover:bg-indigo-50 rounded-lg"><Icons.Edit2 size={15}/></button><button onClick={()=>remSpend(s.id)} className="text-red-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg"><Icons.Trash2 size={16}/></button></div>
+                </div>
+              )
+            )):<p className="text-gray-400 text-center py-10 text-sm">{spend.length?'No matching transactions':'No spending recorded yet'}</p>}
           </div>
         </div>
       );
@@ -1470,12 +1633,14 @@
     }
 
     // ── Setup Tab ─────────────────────────────────────────────────────────
-    function SetupTab({ salary,updSalary,fixed,addFixed,remFixed,balance,updBalance,addFunds,addFund,removeFund,activeSaves,updSave,rates,updRates }) {
+    function SetupTab({ salary,updSalary,fixed,addFixed,remFixed,balance,updBalance,addFunds,addFund,removeFund,activeSaves,updSave,rates,updRates,recurring,addRecurring,remRecurring,toggleRecurring,allCats,budgetLimits,setBudgetLimit,exportData }) {
       const [ns,setNs]=useState(salary); const [cn,setCn]=useState(''); const [ca,setCa]=useState(''); const [nb,setNb]=useState(balance);
       const [fd,setFd]=useState(''); const [fa,setFa]=useState(''); const [fdt,setFdt]=useState(new Date().toISOString().split('T')[0]);
       const [selSaveId,setSelSaveId]=useState(''); const [saveAmt,setSaveAmt]=useState(''); const [saveOk,setSaveOk]=useState('');
       const [usdRate,setUsdRate]=useState(rates.USD||''); const [gbpRate,setGbpRate]=useState(rates.GBP||'');
       const [rateOk,setRateOk]=useState(false);
+      const [rDesc,setRDesc]=useState(''); const [rAmt,setRAmt]=useState(''); const [rCat,setRCat]=useState('Bills'); const [rDay,setRDay]=useState('1');
+      const [limCat,setLimCat]=useState('Food'); const [limAmt,setLimAmt]=useState('');
       const total=fixed.reduce((s,c)=>s+c.amount,0);
 
       const now=new Date();
@@ -1629,6 +1794,69 @@
               Save Exchange Rates
             </button>
             {rateOk&&<p className="text-sm text-blue-700 bg-blue-50 border border-blue-200 rounded-xl p-3 font-medium">✓ Exchange rates updated</p>}
+          </div>
+
+          {/* Recurring transactions */}
+          <div className="bg-gray-50 rounded-xl p-5 space-y-3">
+            <h3 className="font-semibold text-gray-700 flex items-center gap-2"><Icons.Calendar size={17}/> Recurring Transactions</h3>
+            <p className="text-xs text-gray-500">Auto-posted to spending each month on the chosen day. Runs when you open the app on or after that day.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+              <input value={rDesc} onChange={e=>setRDesc(e.target.value)} placeholder="e.g., Rent, Netflix" className="sm:col-span-4 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400"/>
+              <input value={rAmt} onChange={e=>setRAmt(e.target.value)} type="number" placeholder="KES" className="sm:col-span-3 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400"/>
+              <select value={rCat} onChange={e=>setRCat(e.target.value)} className="sm:col-span-3 px-2 py-2 border border-gray-300 rounded-lg text-sm outline-none bg-white">
+                {(allCats||['Bills']).map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+              <select value={rDay} onChange={e=>setRDay(e.target.value)} className="sm:col-span-2 px-2 py-2 border border-gray-300 rounded-lg text-sm outline-none bg-white">
+                {Array.from({length:28},(_,i)=>i+1).map(d=><option key={d} value={d}>Day {d}</option>)}
+              </select>
+            </div>
+            <button onClick={()=>{if(rDesc&&rAmt){addRecurring(rDesc,rAmt,rCat,rDay);setRDesc('');setRAmt('');}}} className="w-full bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Add Recurring</button>
+            {recurring&&recurring.length>0?(
+              <div className="space-y-2 pt-1">
+                {recurring.map(r=>(
+                  <div key={r.id} className={`bg-white rounded-lg p-3 flex items-center justify-between ${r.paused?'opacity-50':''}`}>
+                    <div><p className="text-sm font-medium text-gray-800">{r.description}</p><p className="text-xs text-gray-400">{r.category} · day {r.dayOfMonth} · KES {r.amount.toLocaleString()}/mo{r.paused?' · paused':''}</p></div>
+                    <div className="flex items-center gap-1">
+                      <button onClick={()=>toggleRecurring(r.id)} className="text-xs px-2 py-1 rounded-lg text-gray-500 hover:bg-gray-100 font-medium">{r.paused?'Resume':'Pause'}</button>
+                      <button onClick={()=>remRecurring(r.id)} className="text-red-400 hover:text-red-600 p-1.5 hover:bg-red-50 rounded-lg"><Icons.Trash2 size={15}/></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ):<p className="text-xs text-gray-400 italic">No recurring transactions yet.</p>}
+          </div>
+
+          {/* Category budget limits */}
+          <div className="bg-gray-50 rounded-xl p-5 space-y-3">
+            <h3 className="font-semibold text-gray-700 flex items-center gap-2"><Icons.BarChart size={17}/> Monthly Budget Limits</h3>
+            <p className="text-xs text-gray-500">Set a monthly cap per category. You'll get a warning in the Spending tab as you approach or exceed it.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+              <select value={limCat} onChange={e=>{setLimCat(e.target.value); setLimAmt((budgetLimits||{})[e.target.value]||'');}} className="sm:col-span-5 px-2 py-2 border border-gray-300 rounded-lg text-sm outline-none bg-white">
+                {(allCats||['Food']).map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+              <input value={limAmt} onChange={e=>setLimAmt(e.target.value)} type="number" placeholder="Limit (KES) — blank to remove" className="sm:col-span-5 px-3 py-2 border border-gray-300 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-400"/>
+              <button onClick={()=>setBudgetLimit(limCat,limAmt)} className="sm:col-span-2 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Set</button>
+            </div>
+            {Object.keys(budgetLimits||{}).length>0?(
+              <div className="flex flex-wrap gap-2 pt-1">
+                {Object.entries(budgetLimits).map(([c,lim])=>(
+                  <span key={c} className="text-xs bg-indigo-100 text-indigo-700 px-3 py-1.5 rounded-full flex items-center gap-1.5">
+                    {c}: KES {lim.toLocaleString()}
+                    <button onClick={()=>setBudgetLimit(c,'')} className="text-indigo-400 hover:text-red-500 leading-none font-bold">×</button>
+                  </span>
+                ))}
+              </div>
+            ):<p className="text-xs text-gray-400 italic">No limits set.</p>}
+          </div>
+
+          {/* Backup / export */}
+          <div className="bg-gray-50 rounded-xl p-5 space-y-3">
+            <h3 className="font-semibold text-gray-700 flex items-center gap-2"><Icons.Download size={17}/> Backup & Export</h3>
+            <p className="text-xs text-gray-500">Download a copy of your data. Keep the JSON somewhere safe — it's a full backup of everything.</p>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={()=>exportData('json')} className="bg-gray-800 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-gray-900 flex items-center justify-center gap-2"><Icons.Download size={15}/> Full backup (JSON)</button>
+              <button onClick={()=>exportData('csv')} className="bg-white border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-100 flex items-center justify-center gap-2"><Icons.Download size={15}/> Spending (CSV)</button>
+            </div>
           </div>
         </div>
       );
