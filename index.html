@@ -8,12 +8,13 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <style>* { box-sizing: border-box; } body { margin: 0; }</style>
 </head>
 <body>
   <div id="root"></div>
   <script type="text/babel">
-    const { useState, useEffect } = React;
+    const { useState, useEffect, useRef } = React;
 
     // ── !! CONFIGURE THIS !! ──────────────────────────────────────────────
     // After deploying the backend, paste your Railway/Render URL here.
@@ -73,6 +74,7 @@
       ChevronUp:    p=><Ico {...p} d="M18 15l-6-6-6 6"/>,
       Download:     p=><Ico {...p} d={["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M7 10l5 5 5-5","M12 15V3"]}/>,
       Users:        p=><Ico {...p} d={["M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2","M23 21v-2a4 4 0 0 0-3-3.87","M16 3.13a4 4 0 0 1 0 7.75"]} extra={<circle cx="9" cy="7" r="4"/>}/>,
+      BarChart:     p=><Ico {...p} d={["M12 20V10","M18 20V4","M6 20v-4"]}/>,
     };
 
     // ── Root ──────────────────────────────────────────────────────────────
@@ -545,6 +547,8 @@
         {id:'spending', label:'Spending',     I:Icons.TrendingDown},
         {id:'savings',  label:'Savings',      I:Icons.PiggyBank},
         {id:'loans',    label:'Loans',        I:Icons.CreditCard},
+        {id:'future',   label:'Future Plans', I:Icons.Calendar},
+        {id:'analytics',label:'Analytics',    I:Icons.BarChart},
         {id:'setup',    label:'Setup',        I:Icons.Settings},
         ...(isAdmin ? [{id:'users',label:'Users',I:Icons.Users}] : []),
       ];
@@ -592,6 +596,7 @@
               {tab==='savings'   && <SavingsTab   saves={activeSaves} addSave={addSave} updSave={updSave} remSave={remSave} updSaveCurrency={updSaveCurrency} rates={rates} toKES={toKES} fmtCurr={fmtCurr} CURR={CURR}/>}
               {tab==='loans'     && <LoansTab     loans={activeLoans} addLoan={addLoan} remLoan={remLoan}/>}
               {tab==='future'    && <FuturePlansTab plans={activePlans} addPlan={addPlan} remPlan={remPlan} salary={salary} totalFixed={totalFixed}/>}
+              {tab==='analytics' && <AnalyticsTab spend={spend} addFunds={addFunds} salary={salary} totalFixed={totalFixed}/>}
               {tab==='setup'     && <SetupTab     salary={salary} updSalary={updSalary} fixed={fixed} addFixed={addFixed} remFixed={remFixed} balance={balance} updBalance={updBalance} addFunds={addFunds} addFund={addFund} removeFund={removeFund} activeSaves={activeSaves} updSave={updSave} rates={rates} updRates={updRates}/>}
               {tab==='users'     && isAdmin && <UsersTab/>}
             </div>
@@ -1216,6 +1221,213 @@
     }
 
     // ── Future Plans Tab ──────────────────────────────────────────────────
+    // ── Analytics Tab ─────────────────────────────────────────────────────
+    const CHART_COLORS = ['#4f46e5','#0ea5e9','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#14b8a6','#f97316','#64748b','#a855f7','#22c55e'];
+    const ALLOC_CATS = ['Savings','Loan Payment','Future Plan'];
+
+    function useChart(build, deps) {
+      const ref = useRef(null);
+      const chartRef = useRef(null);
+      useEffect(() => {
+        if (!ref.current || typeof Chart === 'undefined') return;
+        if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; }
+        const cfg = build();
+        if (cfg) chartRef.current = new Chart(ref.current, cfg);
+        return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; } };
+      }, deps);
+      return ref;
+    }
+
+    function AnalyticsTab({ spend, addFunds, salary, totalFixed }) {
+      const mKey   = d => { const x=new Date(d); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,'0')}`; };
+      const mLabel = k => { const [y,m]=k.split('-'); return new Date(+y, +m-1, 1).toLocaleString('default',{month:'short', year:'2-digit'}); };
+      const kes    = v => `KES ${Math.round(v).toLocaleString()}`;
+
+      const now = new Date();
+      const curKey = mKey(now);
+      const months = [...new Set(spend.map(s=>mKey(s.date)))].sort().reverse();
+      const [selMo, setSelMo] = useState(months[0] || curKey);
+      useEffect(()=>{ if (months.length && !months.includes(selMo)) setSelMo(months[0]); }, [spend.length]);
+
+      // ── Selected month figures ──
+      const moSpend   = spend.filter(s=>mKey(s.date)===selMo);
+      const byCat     = {};
+      moSpend.forEach(s=>{ byCat[s.category]=(byCat[s.category]||0)+s.amount; });
+      const catEntries = Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+      const moTotal    = moSpend.reduce((t,s)=>t+s.amount,0);
+
+      // ── 3-month average per category (3 months before selected) ──
+      const prevKeys = (k,n) => { const [y,m]=k.split('-').map(Number); const out=[]; for(let i=1;i<=n;i++){ const d=new Date(y,m-1-i,1); out.push(mKey(d)); } return out; };
+      const prev3 = prevKeys(selMo,3);
+      const prevByCat = {}; let prevMonthsWithData = new Set();
+      spend.forEach(s=>{ const k=mKey(s.date); if(prev3.includes(k)){ prevByCat[s.category]=(prevByCat[s.category]||0)+s.amount; prevMonthsWithData.add(k); } });
+      const nPrev = Math.max(prevMonthsWithData.size,1);
+      const compareRows = catEntries.map(([cat,amt])=>{
+        const avg = (prevByCat[cat]||0)/nPrev;
+        const delta = avg>0 ? ((amt-avg)/avg)*100 : null;
+        return {cat, amt, avg, delta};
+      });
+
+      // ── 12-month trend ──
+      const trendKeys = (()=>{ const out=[]; for(let i=11;i>=0;i--){ const d=new Date(now.getFullYear(), now.getMonth()-i, 1); out.push(mKey(d)); } return out; })();
+      const trendData = trendKeys.map(k=>{
+        const ms = spend.filter(s=>mKey(s.date)===k);
+        return { k, total: ms.reduce((t,s)=>t+s.amount,0) };
+      });
+
+      // ── Burn rate (current calendar month only) ──
+      const curSpend    = spend.filter(s=>mKey(s.date)===curKey);
+      const curTotal    = curSpend.reduce((t,s)=>t+s.amount,0);
+      const daysElapsed = now.getDate();
+      const daysInMonth = new Date(now.getFullYear(), now.getMonth()+1, 0).getDate();
+      const burnPerDay  = daysElapsed>0 ? curTotal/daysElapsed : 0;
+      const projected   = burnPerDay*daysInMonth;
+
+      // ── Savings rate (per month: allocations ÷ income) ──
+      const rateData = trendKeys.slice(-6).map(k=>{
+        const alloc  = spend.filter(s=>mKey(s.date)===k && ALLOC_CATS.includes(s.category)).reduce((t,s)=>t+s.amount,0);
+        const extra  = addFunds.filter(f=>mKey(f.date)===k).reduce((t,f)=>t+f.amount,0);
+        const income = salary + extra;
+        return { k, rate: income>0 ? (alloc/income)*100 : 0 };
+      });
+      const curRate = rateData.length ? rateData[rateData.length-1].rate : 0;
+
+      // ── Top 5 transactions of selected month ──
+      const top5 = [...moSpend].sort((a,b)=>b.amount-a.amount).slice(0,5);
+
+      // ── Charts ──
+      const donutRef = useChart(()=>{
+        if (!catEntries.length) return null;
+        return {
+          type:'doughnut',
+          data:{ labels:catEntries.map(e=>e[0]), datasets:[{ data:catEntries.map(e=>e[1]), backgroundColor:CHART_COLORS, borderWidth:2, borderColor:'#fff' }] },
+          options:{ responsive:true, maintainAspectRatio:false, cutout:'62%',
+            plugins:{ legend:{position:'right', labels:{boxWidth:12, font:{size:11}}},
+              tooltip:{ callbacks:{ label:(c)=>` ${c.label}: KES ${Math.round(c.raw).toLocaleString()} (${moTotal>0?Math.round(c.raw/moTotal*100):0}%)` } } } }
+        };
+      }, [selMo, spend.length]);
+
+      const trendRef = useChart(()=>({
+        type:'bar',
+        data:{ labels:trendKeys.map(mLabel), datasets:[
+          { label:'Total outflow', data:trendData.map(d=>d.total), backgroundColor:'#4f46e5', borderRadius:3 },
+        ]},
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{display:false},
+            tooltip:{ callbacks:{ label:(c)=>` KES ${Math.round(c.raw).toLocaleString()}` } } },
+          scales:{ x:{grid:{display:false}}, y:{beginAtZero:true, ticks:{callback:v=>v>=1000?`${v/1000}k`:v}} } }
+      }), [spend.length]);
+
+      const rateRef = useChart(()=>({
+        type:'line',
+        data:{ labels:rateData.map(d=>mLabel(d.k)), datasets:[{ label:'Savings rate %', data:rateData.map(d=>+d.rate.toFixed(1)), borderColor:'#4f46e5', backgroundColor:'rgba(79,70,229,0.08)', fill:true, tension:0.3, pointRadius:3 }] },
+        options:{ responsive:true, maintainAspectRatio:false,
+          plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:(c)=>` ${c.raw}%` } } },
+          scales:{ y:{beginAtZero:true, ticks:{callback:v=>`${v}%`}}, x:{grid:{display:false}} } }
+      }), [spend.length, addFunds.length, salary]);
+
+      if (!spend.length) return (
+        <div className="space-y-4">
+          <h2 className="text-2xl font-bold text-gray-800">Analytics</h2>
+          <div className="bg-gray-50 rounded-xl p-8 text-center text-gray-500 text-sm">No spending recorded yet. Analytics will appear once you log transactions.</div>
+        </div>
+      );
+
+      const deltaBadge = d => {
+        if (d===null) return <span className="text-xs text-gray-400">new</span>;
+        const up = d>0;
+        return <span className={`text-xs font-semibold ${up?'text-red-600':'text-green-600'}`}>{up?'▲':'▼'} {Math.abs(d).toFixed(0)}%</span>;
+      };
+
+      return (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <h2 className="text-2xl font-bold text-gray-800">Analytics</h2>
+            <select value={selMo} onChange={e=>setSelMo(e.target.value)} className="px-4 py-2 border border-gray-300 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+              {months.map(k=><option key={k} value={k}>{mLabel(k)}</option>)}
+            </select>
+          </div>
+
+          {/* Headline metrics for selected month */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <MetricCard title={`Total outflow (${mLabel(selMo)})`} value={kes(moTotal)} color="blue"/>
+            <MetricCard title="Transactions"                       value={moSpend.length} color="teal"/>
+            <MetricCard title="Savings Rate (this mo.)"            value={`${curRate.toFixed(0)}%`} color="purple"/>
+          </div>
+
+          {/* Category breakdown + comparison */}
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h3 className="font-semibold text-gray-700 text-sm mb-3">Where it went — {mLabel(selMo)}</h3>
+              <div style={{height:'260px'}}>{catEntries.length ? <canvas ref={donutRef}/> : <p className="text-sm text-gray-400 text-center pt-20">No spending this month</p>}</div>
+            </div>
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h3 className="font-semibold text-gray-700 text-sm mb-3">vs 3-month average</h3>
+              <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                {compareRows.map(r=>(
+                  <div key={r.cat} className="bg-white rounded-lg px-3 py-2 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">{r.cat}</p>
+                      <p className="text-xs text-gray-400">avg {kes(r.avg)}/mo</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-gray-800">{kes(r.amt)}</p>
+                      {deltaBadge(r.delta)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* 12-month trend */}
+          <div className="bg-gray-50 rounded-xl p-4">
+            <h3 className="font-semibold text-gray-700 text-sm mb-3">12-month trend</h3>
+            <div style={{height:'260px'}}><canvas ref={trendRef}/></div>
+          </div>
+
+          {/* Burn rate + savings rate */}
+          <div className="grid md:grid-cols-2 gap-4">
+            <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+              <h3 className="font-semibold text-gray-700 text-sm">Daily burn rate — {mLabel(curKey)}</h3>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-white rounded-lg p-3"><p className="text-xs text-gray-400">Avg / day</p><p className="text-lg font-bold text-gray-800">{kes(burnPerDay)}</p></div>
+                <div className="bg-white rounded-lg p-3"><p className="text-xs text-gray-400">Spent so far</p><p className="text-lg font-bold text-gray-800">{kes(curTotal)}</p></div>
+              </div>
+              <div className={`rounded-lg p-3 border-2 ${projected > (salary-totalFixed) ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+                <p className="text-xs text-gray-500">Projected month-end outflow (day {daysElapsed} of {daysInMonth})</p>
+                <p className={`text-xl font-bold ${projected > (salary-totalFixed) ? 'text-red-700' : 'text-green-700'}`}>{kes(projected)}</p>
+                <p className="text-xs text-gray-500 mt-1">Available after fixed costs: {kes(salary-totalFixed)}</p>
+              </div>
+            </div>
+            <div className="bg-gray-50 rounded-xl p-4">
+              <h3 className="font-semibold text-gray-700 text-sm mb-3">Savings rate — last 6 months</h3>
+              <div style={{height:'200px'}}><canvas ref={rateRef}/></div>
+              <p className="text-xs text-gray-400 mt-2">Savings + loan payments + future plan contributions as % of income (salary + additional funds).</p>
+            </div>
+          </div>
+
+          {/* Top transactions */}
+          <div className="bg-gray-50 rounded-xl p-4">
+            <h3 className="font-semibold text-gray-700 text-sm mb-3">Top 5 transactions — {mLabel(selMo)}</h3>
+            {top5.length ? (
+              <div className="space-y-2">
+                {top5.map(t=>(
+                  <div key={t.id} className="bg-white rounded-lg px-3 py-2 flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">{t.description}</p>
+                      <p className="text-xs text-gray-400">{t.category} · {new Date(t.date).toLocaleDateString()}</p>
+                    </div>
+                    <p className="text-sm font-bold text-gray-800">{kes(t.amount)}</p>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="text-sm text-gray-400">No transactions this month.</p>}
+          </div>
+        </div>
+      );
+    }
+
     function FuturePlansTab({ plans,addPlan,remPlan,salary,totalFixed }) {
       const [name,setName]=useState(''); const [amt,setAmt]=useState(''); const [mo,setMo]=useState('6');
       const surplus=salary-totalFixed;
